@@ -17,7 +17,7 @@ from gts_agent.core.sources.patches import apply_patch_manifest
 from gts_agent.core.verify.abi import analyze_binary
 from gts_agent.core.verify.isolation import compare_snapshots, save_snapshot, take_snapshot
 from gts_agent.core.verify.report import build_provenance, build_sbom, write_json
-from gts_agent.core.verify.rpm import inspect_rpm_dir
+from gts_agent.core.verify.rpm import inspect_rpm_dir, inspectable_rpms, component_rpm_ready
 from gts_agent.core.verify.toolchain import results_to_dict, run_toolchain_tests
 from gts_agent.executors.podman import ExecutorError, PodmanExecutor, image_exists
 from gts_agent.executors.rpmbuild import (
@@ -26,10 +26,25 @@ from gts_agent.executors.rpmbuild import (
     prepare_rpmbuild_tree,
     rpmbuild_in_container,
 )
-from gts_agent.core.verify.rpm import is_debug_or_source_rpm
 
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 _TEMPLATE_ROOT = _PKG_ROOT / "templates"
+
+# 每次 podman run 都是全新容器，验证阶段必须自行安装二进制 RPM。
+INSTALL_BINARY_RPMS = r"""
+rpms=()
+for f in /job/rpms/*.rpm; do
+  case "$f" in
+    *debuginfo*|*debugsource*|*.src.rpm) continue ;;
+    *) rpms+=("$f") ;;
+  esac
+done
+if [ ${#rpms[@]} -eq 0 ]; then
+  echo "rpms/ 中没有可安装的二进制 RPM" >&2
+  exit 1
+fi
+rpm -Uvh "${rpms[@]}"
+"""
 
 
 class Pipeline:
@@ -113,10 +128,16 @@ class Pipeline:
             prepare_rpmbuild_tree(job_dir, source_files, extra)
 
             built: List[str] = []
-            extra_rpms: List[Path] = []
             rpm_dest = job_dir / "rpms"
+            extra_rpms = inspectable_rpms(rpm_dest)
             order = ["runtime", "binutils", "gcc"]
+            skipped: List[str] = []
             for component in order:
+                if component_rpm_ready(rpm_dest, self.orch.config.toolset_id, component):
+                    skipped.append(component)
+                    built.append(component)
+                    extra_rpms = inspectable_rpms(rpm_dest)
+                    continue
                 spec = job_dir / "specs" / (
                     f"gcc-toolset-{self.orch.config.toolset_id}-{component}.spec"
                 )
@@ -129,14 +150,16 @@ class Pipeline:
                     timeout=COMPONENT_TIMEOUTS.get(component, 21600),
                 )
                 (logs_dir / f"rpmbuild-{component}.log").write_text(log, encoding="utf-8")
-                copied = collect_rpms(job_dir / "rpmbuild", rpm_dest)
-                extra_rpms = [
-                    path for path in copied
-                    if not is_debug_or_source_rpm(path)
-                ]
+                collect_rpms(job_dir / "rpmbuild", rpm_dest)
+                extra_rpms = inspectable_rpms(rpm_dest)
                 built.append(component)
-            return {"components": built, "rpms": [p.name for p in extra_rpms]}, {
-                "log_artifacts": [str(logs_dir / f"rpmbuild-{c}.log") for c in built]
+            return {
+                "components": built,
+                "skipped": skipped,
+                "rpms": [p.name for p in extra_rpms],
+            }, {
+                "log_artifacts": [str(logs_dir / f"rpmbuild-{c}.log") for c in built
+                                  if c not in skipped]
             }
 
         self.orch.machine.run_state(
@@ -233,7 +256,7 @@ from gts_agent.core.verify.isolation import take_snapshot, save_snapshot
 save_snapshot(take_snapshot(), "/job/reports/snapshot-before.json")
 print("snapshot-before")
 PY
-rpm -Uvh $(ls /job/rpms/*.rpm | grep -vE 'debuginfo|debugsource|\\.src\\.rpm')
+{INSTALL_BINARY_RPMS}
 python3 - <<'PY'
 import json, sys
 sys.path.insert(0, "/src")
@@ -265,7 +288,7 @@ test -f /opt/rh/gcc-toolset-{toolset_id}/enable
                 ],
                 env={"PYTHONPATH": "/src"},
                 workdir="/job",
-                timeout=600,
+                timeout=1800,
             )
             log = result.stdout + result.stderr
             (job_dir / "logs" / "install-test.log").write_text(log, encoding="utf-8")
@@ -279,7 +302,11 @@ test -f /opt/rh/gcc-toolset-{toolset_id}/enable
         def compile_runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             script = f"""
 set -euo pipefail
+{INSTALL_BINARY_RPMS}
 source /opt/rh/gcc-toolset-{toolset_id}/enable
+hash -r
+test -x "$(command -v gcc)"
+gcc --version
 python3 - <<'PY'
 import json, os, sys
 from pathlib import Path
@@ -306,7 +333,7 @@ PY
                     f"{tests_src}:/tests:ro",
                 ],
                 env={"PYTHONPATH": "/src"},
-                timeout=600,
+                timeout=1800,
             )
             log = result.stdout + result.stderr
             (job_dir / "logs" / "compile-test.log").write_text(log, encoding="utf-8")

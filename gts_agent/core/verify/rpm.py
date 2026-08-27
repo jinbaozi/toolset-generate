@@ -26,6 +26,24 @@ def inspectable_rpms(rpms_dir: Path) -> List[Path]:
     ]
 
 
+def component_rpm_ready(rpms_dir: Path, toolset_id: str, component: str) -> bool:
+    """rpms/ 中是否已有该组件的二进制包（不含 debuginfo / gcc-c++）。"""
+    import re
+    patterns = {
+        "runtime": rf"^gcc-toolset-{re.escape(toolset_id)}-runtime-.*\.noarch\.rpm$",
+        "binutils": rf"^gcc-toolset-{re.escape(toolset_id)}-binutils-[0-9].*\.x86_64\.rpm$",
+        "gcc": rf"^gcc-toolset-{re.escape(toolset_id)}-gcc-[0-9].*\.x86_64\.rpm$",
+    }
+    pattern = patterns.get(component)
+    if not pattern:
+        return False
+    matcher = re.compile(pattern)
+    return any(
+        matcher.match(path.name) and not is_debug_or_source_rpm(path)
+        for path in rpms_dir.glob("*.rpm")
+    )
+
+
 def _rpm_query(rpm: Path, query: str) -> str:
     result = subprocess.run(
         ["rpm", "-qp", "--qf", query, str(rpm)],
