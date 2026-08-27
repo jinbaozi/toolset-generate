@@ -72,10 +72,18 @@ def rpmbuild_in_container(
         rpm_names = " ".join(f"/job/rpms/{path.name}" for path in extra_rpms)
         install_cmds = f"rpm -Uvh {rpm_names}\n"
 
+    defines = [
+        "--define '_topdir /job/rpmbuild'",
+        "--define 'gts_agent_home /src'",
+    ]
+    # 最小工具集验证不需要 GCC debuginfo；find-debuginfo 会显著拉长打包。
+    if spec_path.name.endswith("-gcc.spec"):
+        defines.append("--define 'debug_package %{nil}'")
+    define_lines = " \\\n  ".join(defines)
+
     script = f"""set -euo pipefail
 {install_cmds}rpmbuild -ba \\
-  --define '_topdir /job/rpmbuild' \\
-  --define 'gts_agent_home /src' \\
+  {define_lines} \\
   /job/specs/{spec_path.name}
 """
     volumes = [

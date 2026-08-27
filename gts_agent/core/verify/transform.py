@@ -23,6 +23,14 @@ _PRIVATE_DSO_PREFIXES = (
     "libgcc_s.so.",
 )
 
+# 与 policies/default.yaml 允许前缀一致；其余 staged 文件会导致未打包或覆盖系统路径。
+_ALLOWED_STAGE_PREFIXES = (
+    "/opt/rh/",
+    "/usr/bin/gcc-toolset-",
+    "/usr/lib/gcc-toolset/",
+    "/usr/lib/rpm/macros.d/macros.gts-",
+)
+
 
 def _lib_dirs(stage_root: Path, toolset_prefix: str) -> List[Path]:
     prefix = stage_root / toolset_prefix.lstrip("/")
@@ -60,6 +68,37 @@ def _write_system_linker_scripts(libdir: Path, system_libdir: str) -> None:
     )
 
 
+def _allowed_install_path(install_path: str) -> bool:
+    return any(install_path.startswith(prefix) for prefix in _ALLOWED_STAGE_PREFIXES)
+
+
+def _remove_foreign_stage_files(stage_root: Path) -> List[str]:
+    """删除允许前缀之外的 staged 文件，避免 RPM 未打包文件或写入系统路径。"""
+    removed: List[str] = []
+    for dirpath, _dirnames, filenames in os.walk(stage_root, topdown=False):
+        directory = Path(dirpath)
+        for filename in filenames:
+            full = directory / filename
+            install_path = "/" + str(full.relative_to(stage_root))
+            if _allowed_install_path(install_path):
+                continue
+            if full.is_symlink() or full.is_file():
+                full.unlink()
+                removed.append(install_path)
+        if directory == stage_root:
+            continue
+        install_dir = "/" + str(directory.relative_to(stage_root))
+        if _allowed_install_path(install_dir + "/"):
+            continue
+        try:
+            next(directory.iterdir())
+        except StopIteration:
+            directory.rmdir()
+        except OSError:
+            continue
+    return removed
+
+
 def transform_stage(
     stage_root: Path,
     toolset_prefix: str,
@@ -72,6 +111,8 @@ def transform_stage(
         if la_path.is_file() and not la_path.is_symlink():
             la_path.unlink()
             actions.append(f"removed libtool archive {la_path}")
+    for foreign in _remove_foreign_stage_files(stage_root):
+        actions.append(f"removed foreign staged file {foreign}")
     if runtime_strategy == "private-runtime":
         actions.append("private-runtime: 保留目标 libstdc++/libgcc_s DSO")
         return actions
