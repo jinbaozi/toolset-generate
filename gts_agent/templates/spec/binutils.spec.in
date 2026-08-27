@@ -70,7 +70,7 @@ MAKEINFO=/bin/true \
 
 %install
 rm -rf %{buildroot}
-%make_install -C obj-%{target_triple}
+%make_install -C obj-%{target_triple} MAKEINFO=/bin/true
 
 # 最小工具集：Toolset 前缀内 ld -> ld.bfd，不使用全局 alternatives。
 if [ -e %{buildroot}%{tsprefix}/bin/ld.bfd ] && [ ! -e %{buildroot}%{tsprefix}/bin/ld ]; then

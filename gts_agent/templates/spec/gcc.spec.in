@@ -112,7 +112,7 @@ MAKEINFO=/bin/true \
 
 %install
 rm -rf %{buildroot}
-%make_install -C obj-%{target_triple}
+%make_install -C obj-%{target_triple} MAKEINFO=/bin/true
 
 export PYTHONPATH=%{gts_home}
 python3 %{gts_home}/scripts/transform-stage \
