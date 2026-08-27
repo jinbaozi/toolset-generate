@@ -1,0 +1,34 @@
+# 黄金参考 Profile B：CentOS Stream 10 / GCC Toolset 15（方案 24）。
+schema_version: 1
+profile_id: cs10-gts15
+distro:
+  id: centos-stream
+  major: 10
+architectures: [x86_64, aarch64]
+toolset:
+  id: "15"
+  name: gcc-toolset-15
+  root: /opt/rh/gcc-toolset-15/root
+  framework: gts-env
+  activation: gcc-toolset-15-env
+runtime_strategy: system-nonshared
+nonshared:
+  baseline: "140"
+  patch: gcc15-libstdc++-compat.patch
+  install_name: libstdc++_nonshared.a
+target_gcc:
+  version: 15.2.1
+  major: 15
+  dist_git: https://gitlab.com/redhat/centos-stream/rpms/gcc-toolset-15-gcc
+  branch: c10s
+  reference_commit: "0b3357b4"
+target_binutils:
+  version: "2.44"
+  dist_git: https://gitlab.com/redhat/centos-stream/rpms/gcc-toolset-15-binutils
+  branch: c10s
+  reference_commit: "35231402"
+rpm_adapter: rpm-4.19
+notes:
+  - "RHEL 10 移除 scl-utils，使用 gcc-toolset-15-env 与内置最小宏 macros.gts"
+  - "RHEL 10 选择 nonsharedver=140"
+  - "binutils 2.44：RELRO、新 dtags、禁用 rpath、可执行栈/RWX 检测"

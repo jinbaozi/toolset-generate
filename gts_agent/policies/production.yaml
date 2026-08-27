@@ -1,0 +1,17 @@
+# 生产策略：在 default 之上收紧（方案 17.8 发布阻断条件）。
+schema_version: 1
+policy_id: production
+version: 1
+inherits: default
+
+retries:
+  max_transient_retries: 3
+  max_auto_repairs: 2
+
+release_gates:
+  require_reproducible_builds: 2
+  require_sbom: true
+  require_provenance: true
+  require_signed_rpm: true
+  require_signed_repodata: true
+  block_on_unknown_high_risk: true

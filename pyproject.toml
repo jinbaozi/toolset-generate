@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gts-agent"
+version = "0.1.0"
+description = "GCC 多版本 Toolset 自动改造、构建、打包和验证智能体（第一阶段原型）"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "PyYAML>=5.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+]
+
+[project.scripts]
+gts-agent = "gts_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gts_agent*"]
+
+[tool.setuptools.package-data]
+gts_agent = [
+    "templates/spec/*.spec.in",
+    "templates/activation/*.in",
+    "schemas/*.json",
+    "policies/*.yaml",
+    "reference_profiles/*/*.yaml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

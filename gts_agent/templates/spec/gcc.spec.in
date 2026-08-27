@@ -1,0 +1,117 @@
+# 本文件由 gts-agent 生成器渲染，属于本项目 Spec 骨架，
+# 不是 Red Hat 原始 Spec。所有 %files 必须使用 -f 精确清单。
+
+%global toolset_id       @TOOLSET_ID@
+%global tsname           gcc-toolset-%{toolset_id}
+%global gcc_major        @GCC_MAJOR@
+%global target_triple    @TARGET_TRIPLE@
+%global tsroot           /opt/rh/%{tsname}/root
+%global tsprefix         %{tsroot}/usr
+%global runtime_strategy @RUNTIME_STRATEGY@
+
+Name:           %{tsname}-gcc
+Version:        @GCC_VERSION@
+Release:        @RELEASE@%{?dist}
+Summary:        Parallel-installable GCC %{gcc_major} for %{tsname}
+License:        @LICENSE_EXPRESSION@
+URL:            @PROJECT_URL@
+
+Source0:        gcc-@SOURCE_VERSION@.tar.xz
+Source1:        source.lock.json
+Source2:        patch-manifest.yaml
+Source3:        build-plan.yaml
+Source4:        gcc.files
+Source5:        gcc-cxx.files
+Source6:        libstdcxx-devel.files
+
+BuildRequires:  make
+BuildRequires:  gcc
+BuildRequires:  gcc-c++
+BuildRequires:  glibc-devel
+BuildRequires:  binutils
+BuildRequires:  gmp-devel
+BuildRequires:  mpfr-devel
+BuildRequires:  libmpc-devel
+BuildRequires:  zlib-devel
+BuildRequires:  %{tsname}-runtime = @RUNTIME_EVR@
+BuildRequires:  %{tsname}-binutils = @BINUTILS_EVR@
+
+Requires:       %{tsname}-runtime = @RUNTIME_EVR@
+Requires:       %{tsname}-binutils >= @BINUTILS_MIN_EVR@
+Requires:       glibc%{?_isa}
+Requires:       libgcc%{?_isa}
+
+Provides:       gcc-toolset(%{toolset_id})
+Provides:       gcc-toolset-gcc(major) = %{gcc_major}
+
+%description
+Parallel-installable GCC compiler for %{tsname}.
+It does not replace the system GCC.
+
+%package c++
+Summary:        C++ support for %{tsname}
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+Requires:       %{tsname}-libstdc++-devel%{?_isa} = %{version}-%{release}
+
+%description c++
+C++ compiler frontend and driver for %{tsname}.
+
+%package -n %{tsname}-libstdc++-devel
+Summary:        C++ headers and libraries for %{tsname}
+Requires:       libstdc++%{?_isa}
+
+%description -n %{tsname}-libstdc++-devel
+C++ standard library headers, linker scripts and static archives
+for %{tsname}.
+
+%prep
+%autosetup -N -n @SOURCE_DIR@
+%{_libexecdir}/gts-agent/apply-patches \
+    --manifest %{SOURCE2} \
+    --source-root "$PWD" \
+    --require-zero-fuzz
+
+%build
+mkdir -p obj-%{target_triple}
+cd obj-%{target_triple}
+
+PATH="%{tsprefix}/bin:${PATH}" \
+../configure \
+    --build=%{target_triple} \
+    --host=%{target_triple} \
+    --target=%{target_triple} \
+    --prefix=%{tsprefix} \
+    --exec-prefix=%{tsprefix} \
+    --libdir=%{tsprefix}/%{_lib} \
+    --libexecdir=%{tsprefix}/libexec \
+    --enable-languages=@LANGUAGES@ \
+    --enable-shared \
+    --enable-threads=posix \
+    @CONFIGURE_FLAGS@
+
+%make_build @BOOTSTRAP_TARGET@
+
+%install
+rm -rf %{buildroot}
+%make_install -C obj-%{target_triple}
+
+%{_libexecdir}/gts-agent/transform-stage \
+    --root %{buildroot} \
+    --plan %{SOURCE3}
+
+%{_libexecdir}/gts-agent/discover-files \
+    --root %{buildroot} \
+    --gcc %{buildroot}%{tsprefix}/bin/gcc \
+    --output %{_builddir}/generated-manifests
+
+%check
+%{_libexecdir}/gts-agent/verify-stage \
+    --root %{buildroot} \
+    --profile @VALIDATION_PROFILE@
+
+%files -f %{SOURCE4}
+%files c++ -f %{SOURCE5}
+%files -n %{tsname}-libstdc++-devel -f %{SOURCE6}
+
+%changelog
+@CHANGELOG@

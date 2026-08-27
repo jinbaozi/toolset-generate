@@ -1,0 +1,38 @@
+# 黄金参考 Profile A：CentOS Stream 9 / GCC Toolset 14（方案 24）。
+# 所有字段均来自 CentOS Stream dist-git 的公开源码研究结果；
+# commit 在任务开始时必须重新锁定并校验。
+schema_version: 1
+profile_id: cs9-gts14
+distro:
+  id: centos-stream
+  major: 9
+architectures: [x86_64, aarch64]
+toolset:
+  id: "14"
+  name: gcc-toolset-14
+  root: /opt/rh/gcc-toolset-14/root
+  framework: scl-utils
+  activation: scl-enable
+runtime_strategy: system-nonshared
+nonshared:
+  baseline: "110"
+  patch: gcc14-libstdc++-compat.patch
+  source_dirs:
+    - libstdc++-v3/src/nonshared98
+    - libstdc++-v3/src/nonshared11
+    - libstdc++-v3/src/nonshared17
+    - libstdc++-v3/src/nonshared20
+  install_name: libstdc++_nonshared.a
+target_gcc:
+  version: 14.2.1
+  major: 14
+  dist_git: https://gitlab.com/redhat/centos-stream/rpms/gcc-toolset-14-gcc
+  branch: c9s
+  reference_commit: "11662494"
+target_binutils:
+  version: "2.41"
+rpm_adapter: rpm-4.16
+notes:
+  - "使用 scl-utils-build；RHEL 9 选择 nonsharedver=110"
+  - "C++ 链接脚本指向系统 libstdc++.so.6 并增加 -lstdc++_nonshared"
+  - "nonshared 是源码级、基线级和架构相关改造，不可跨基线复制"

@@ -1,0 +1,342 @@
+"""Orchestrator：把配置、探测、分析、计划和审批串成可恢复流程。
+
+MVP 中真正可端到端执行的阶段是：
+Discover -> ResolveSources(锁定) -> AnalyzeCompatibility -> GeneratePlan -> Approval。
+Build 及之后的阶段生成完整的 Mock 执行计划（executors.mock），
+在具备 Mock/构建根的环境中执行；本模块自身绝不写宿主系统路径。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import yaml
+
+from gts_agent import __version__
+from gts_agent.adapters.distro import get_adapter
+from gts_agent.agent.approvals import require_approval
+from gts_agent.agent.policy_engine import (
+    Policy,
+    evaluate_fast_fail,
+    load_policy,
+)
+from gts_agent.agent.state_machine import (
+    JobStateMachine,
+    State,
+    job_fingerprint,
+)
+from gts_agent.core.compatibility.binutils import probe_binutils
+from gts_agent.core.compatibility.gcc import analyze_gcc
+from gts_agent.core.models.compatibility import Verdict
+from gts_agent.core.models.config import JobConfig
+from gts_agent.core.models.source_lock import LockedSource, SourceLock
+from gts_agent.core.probe import probe_host
+from gts_agent.core.spec.renderer import render_template_file
+
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "spec"
+
+
+class Orchestrator:
+    def __init__(self, config: JobConfig, work_root: Path, policy_name: str = "default"):
+        self.config = config
+        self.job_dir = work_root / config.name
+        self.job_dir.mkdir(parents=True, exist_ok=True)
+        self.machine = JobStateMachine(self.job_dir)
+        self.policy: Policy = load_policy(policy_name)
+        self.adapter = get_adapter(
+            config.platform.distro.id, config.platform.distro.major
+        )
+
+    # ---------- Discover ----------
+
+    def discover(self) -> Dict[str, Any]:
+        def runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            inventory = probe_host(self.config.base_gcc.executable)
+            data = inventory.to_dict()
+            out = self.job_dir / "inventory.json"
+            out.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            return data, {"log_artifacts": [str(out)]}
+
+        record = self.machine.run_state(
+            State.DISCOVER, {"config": self.config.fingerprint_component()}, runner
+        )
+        return json.loads((self.job_dir / "inventory.json").read_text(encoding="utf-8"))
+
+    # ---------- Resolve Sources ----------
+
+    def resolve_sources(self) -> SourceLock:
+        def runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            lock = SourceLock()
+            for name, source in self.config.sources.items():
+                lock.sources.append(LockedSource(
+                    name=name,
+                    type=source.type,
+                    uri=source.uri,
+                    sha256=source.sha256,
+                ))
+            raw_sources = self.config.raw.get("sources", {})
+            lock.source_date_epoch = raw_sources.get("source_date_epoch")
+            repos = self.config.raw.get("repositories", {}) or {}
+            lock.repo_snapshot_id = str(repos.get("snapshot_id", ""))
+            lock.save(self.job_dir / "source.lock.json")
+            return lock.to_dict(), {"log_artifacts": [str(self.job_dir / "source.lock.json")]}
+
+        self.machine.run_state(
+            State.RESOLVE_SOURCES,
+            {"sources": {k: v.sha256 for k, v in self.config.sources.items()}},
+            runner,
+        )
+        return SourceLock.load(self.job_dir / "source.lock.json")
+
+    # ---------- Analyze ----------
+
+    def analyze(self, run_binutils_probes: bool = True) -> Dict[str, Any]:
+        inventory_path = self.job_dir / "inventory.json"
+        if not inventory_path.exists():
+            raise RuntimeError("缺少 inventory.json；请先运行 discover")
+        inventory_data = json.loads(inventory_path.read_text(encoding="utf-8"))
+
+        def runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            from gts_agent.core.models.inventory import (
+                BinutilsInfo, GccInfo, Inventory,
+            )
+            gcc_data = inventory_data.get("gcc") or {}
+            binutils_data = inventory_data.get("binutils") or {}
+            inventory = Inventory(
+                **{k: v for k, v in inventory_data.items()
+                   if k not in ("gcc", "binutils")},
+            )
+            inventory.gcc = GccInfo(**gcc_data) if gcc_data else None
+            inventory.binutils = BinutilsInfo(**binutils_data) if binutils_data else None
+
+            report = analyze_gcc(self.config, inventory)
+
+            # 配置级策略快速失败
+            policy_decisions = [
+                {"rule": d.rule, "result": d.result, "detail": d.detail}
+                for d in evaluate_fast_fail(self.config)
+            ]
+            denies = [d for d in policy_decisions if d["result"] == "DENY"]
+            if denies:
+                from gts_agent.core.models.compatibility import Finding
+                for deny in denies:
+                    report.add(Finding(
+                        verdict=Verdict.FAIL,
+                        reason_code="E-POLICY",
+                        message=deny["detail"],
+                    ))
+
+            result: Dict[str, Any] = report.to_dict()
+
+            if run_binutils_probes:
+                probe_report = probe_binutils(self.config.base_gcc.executable)
+                result["binutils_probes"] = probe_report.to_dict()
+                if probe_report.failed:
+                    result["verdict"] = Verdict.WARN.value \
+                        if result["verdict"] == Verdict.PASS.value else result["verdict"]
+
+            out = self.job_dir / "compatibility-report.json"
+            out.write_text(
+                json.dumps(result, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            if result["verdict"] == Verdict.FAIL.value:
+                raise RuntimeError(
+                    f"兼容性判定 FAIL：{result['reason_codes']}（详见 {out}）"
+                )
+            return result, {"policy_decisions": policy_decisions,
+                            "log_artifacts": [str(out)]}
+
+        self.machine.run_state(
+            State.ANALYZE_COMPATIBILITY,
+            {"inventory": inventory_data,
+             "config": self.config.fingerprint_component()},
+            runner,
+        )
+        return json.loads(
+            (self.job_dir / "compatibility-report.json").read_text(encoding="utf-8")
+        )
+
+    # ---------- Plan ----------
+
+    def generate_configure_flags(self) -> List[str]:
+        flags = list(self.adapter.extra_configure_flags)
+        flags.extend([
+            "--enable-__cxa_atexit",
+            "--enable-plugin",
+            "--enable-linker-build-id",
+            "--enable-checking=release",
+            "--with-system-zlib",
+            "--disable-multilib",
+            f"--with-pkgversion=Internal GCC Toolset {self.config.toolset_id}",
+        ])
+        return flags
+
+    def generate_plan(self) -> Path:
+        source_lock_path = self.job_dir / "source.lock.json"
+        compat_path = self.job_dir / "compatibility-report.json"
+        for required in (source_lock_path, compat_path):
+            if not required.exists():
+                raise RuntimeError(f"缺少 {required.name}；请先完成前序阶段")
+
+        def runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            plan_dir = self.job_dir / "plan"
+            plan_dir.mkdir(parents=True, exist_ok=True)
+
+            configure_flags = self.generate_configure_flags()
+            languages = ",".join(
+                "c++" if lang == "cxx" else lang
+                for lang in self.config.target_gcc.languages
+            )
+
+            build_plan: Dict[str, Any] = {
+                "schema_version": 1,
+                "generator": f"gts-agent {__version__}",
+                "job": self.config.name,
+                "adapter": self.adapter.name,
+                "spec_renderer": self.adapter.spec_renderer,
+                "runtime_strategy": self.config.toolset.runtime_strategy,
+                "packaging_layout": self.config.packaging_layout,
+                "packages": self._package_graph(),
+                "build_dag": [
+                    "runtime-macro-package",
+                    "seed-binutils(system-gcc)",
+                    "target-gcc",
+                    *(
+                        ["final-binutils(toolset-gcc)"]
+                        if self.config.binutils.rebuild_with_target_gcc else []
+                    ),
+                    "gcc-final-link-validation",
+                ],
+                "gcc": {
+                    "version": self.config.target_gcc.version,
+                    "bootstrap": self.config.target_gcc.bootstrap,
+                    "languages": languages,
+                    "configure_flags": configure_flags,
+                    "out_of_tree": True,
+                },
+                "binutils": {
+                    "version": self.config.binutils.version,
+                    "rebuild_with_target_gcc": self.config.binutils.rebuild_with_target_gcc,
+                },
+                "toolset": {
+                    "root": self.config.toolset.root,
+                    "prefix": self.config.toolset.prefix,
+                },
+                "nonshared_baseline": (
+                    self.adapter.nonshared_baseline
+                    if self.config.toolset.runtime_strategy == "system-nonshared"
+                    else None
+                ),
+            }
+            plan_path = plan_dir / "build-plan.yaml"
+            plan_path.write_text(
+                yaml.safe_dump(build_plan, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+
+            # 渲染 GCC Spec（%files 使用精确清单占位；实际清单在 StageInstall 后生成）
+            tokens = {
+                "TOOLSET_ID": self.config.toolset_id,
+                "GCC_MAJOR": str(self.config.target_gcc.major),
+                "GCC_VERSION": self.config.target_gcc.version,
+                "TARGET_TRIPLE": self.config.platform.target_triple,
+                "RUNTIME_STRATEGY": self.config.toolset.runtime_strategy,
+                "RELEASE": "1",
+                "LICENSE_EXPRESSION": "GPL-3.0-or-later WITH GCC-exception-3.1",
+                "PROJECT_URL": "https://example.internal/gts-agent",
+                "SOURCE_VERSION": self.config.target_gcc.version,
+                "SOURCE_DIR": f"gcc-{self.config.target_gcc.version}",
+                "LANGUAGES": languages,
+                "CONFIGURE_FLAGS": " \\\n    ".join(configure_flags),
+                "BOOTSTRAP_TARGET": (
+                    "profiledbootstrap"
+                    if self.config.target_gcc.bootstrap == "profiledbootstrap"
+                    else "bootstrap"
+                ),
+                "VALIDATION_PROFILE": "production",
+                "RUNTIME_EVR": f"{self.config.target_gcc.version}-1",
+                "BINUTILS_EVR": f"{self.config.binutils.version}-1",
+                "BINUTILS_MIN_EVR": self.config.binutils.version,
+                "BINUTILS_VERSION": self.config.binutils.version,
+                "RUNTIME_VERSION": self.config.target_gcc.version,
+                "CHANGELOG": (
+                    f"* Initial generated spec for gcc-toolset-{self.config.toolset_id}"
+                ),
+            }
+            specs_dir = self.job_dir / "specs"
+            specs_dir.mkdir(parents=True, exist_ok=True)
+            for template in ("gcc", "binutils", "runtime"):
+                rendered = render_template_file(
+                    _TEMPLATE_DIR / f"{template}.spec.in", tokens
+                )
+                (specs_dir / f"gcc-toolset-{self.config.toolset_id}-{template}.spec").write_text(
+                    rendered, encoding="utf-8"
+                )
+
+            plan_sha = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+            (plan_dir / "plan.sha256").write_text(plan_sha + "\n", encoding="utf-8")
+            return build_plan, {"log_artifacts": [str(plan_path)]}
+
+        self.machine.run_state(
+            State.GENERATE_PLAN,
+            {
+                "config": self.config.fingerprint_component(),
+                "source_lock": source_lock_path.read_text(encoding="utf-8"),
+            },
+            runner,
+        )
+        return self.job_dir / "plan" / "build-plan.yaml"
+
+    def _package_graph(self) -> List[str]:
+        toolset_id = self.config.toolset_id
+        base = f"gcc-toolset-{toolset_id}"
+        if self.config.packaging_layout == "strict-two-package":
+            return [f"{base}-gcc", f"{base}-binutils"]
+        packages = [
+            f"{base}-runtime",
+            f"{base}-binutils",
+            f"{base}-gcc",
+            f"{base}-gcc-c++",
+            f"{base}-libstdc++-devel",
+        ]
+        if self.config.toolset.runtime_strategy == "private-runtime":
+            packages.append(f"{base}-runtime-libs")
+        return packages
+
+    # ---------- Approval / Build gate ----------
+
+    def plan_sha256(self) -> str:
+        path = self.job_dir / "plan" / "plan.sha256"
+        if not path.exists():
+            raise RuntimeError("尚未生成 plan；请先运行 gts-agent plan")
+        return path.read_text(encoding="utf-8").strip()
+
+    def check_build_gate(self) -> None:
+        """Build 之前的审批门：plan 审批 +（如需要）private-runtime 审批。"""
+        plan_sha = self.plan_sha256()
+        require_approval(self.job_dir, plan_sha, scope="build-plan")
+        if (
+            self.config.toolset.runtime_strategy == "private-runtime"
+            and self.config.policy.require_private_runtime_approval
+        ):
+            require_approval(self.job_dir, plan_sha, scope="private-runtime")
+
+    def fingerprint(self) -> str:
+        components = {
+            "canonical_config": self.config.fingerprint_component(),
+            "policy_version": str(self.policy.data.get("version", "")),
+            "adapter": self.adapter.name,
+            "agent_version": __version__,
+        }
+        lock_path = self.job_dir / "source.lock.json"
+        if lock_path.exists():
+            components["source_lock"] = hashlib.sha256(
+                lock_path.read_bytes()
+            ).hexdigest()
+        return job_fingerprint(components)

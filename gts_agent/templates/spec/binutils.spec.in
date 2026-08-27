@@ -1,0 +1,70 @@
+# 本文件由 gts-agent 生成器渲染，属于本项目 Spec 骨架，
+# 不是 Red Hat 原始 Spec。
+
+%global toolset_id       @TOOLSET_ID@
+%global tsname           gcc-toolset-%{toolset_id}
+%global target_triple    @TARGET_TRIPLE@
+%global tsroot           /opt/rh/%{tsname}/root
+%global tsprefix         %{tsroot}/usr
+
+Name:           %{tsname}-binutils
+Version:        @BINUTILS_VERSION@
+Release:        @RELEASE@%{?dist}
+Summary:        Parallel-installable binutils for %{tsname}
+License:        @LICENSE_EXPRESSION@
+URL:            @PROJECT_URL@
+
+Source0:        binutils-@BINUTILS_VERSION@.tar.xz
+Source1:        source.lock.json
+Source2:        binutils.files
+
+BuildRequires:  make
+BuildRequires:  gcc
+BuildRequires:  gcc-c++
+BuildRequires:  glibc-devel
+BuildRequires:  zlib-devel
+BuildRequires:  %{tsname}-runtime = @RUNTIME_EVR@
+
+Requires:       %{tsname}-runtime = @RUNTIME_EVR@
+
+Provides:       gcc-toolset-binutils(%{toolset_id}) = %{version}-%{release}
+
+%description
+Parallel-installable binutils for %{tsname}.
+It does not replace the system binutils.
+
+%prep
+%autosetup -n binutils-@BINUTILS_VERSION@
+
+%build
+mkdir -p obj-%{target_triple}
+cd obj-%{target_triple}
+
+../configure \
+    --build=%{target_triple} \
+    --host=%{target_triple} \
+    --target=%{target_triple} \
+    --prefix=%{tsprefix} \
+    --libdir=%{tsprefix}/%{_lib} \
+    --with-sysroot=/ \
+    --enable-shared \
+    --enable-plugins \
+    --enable-relro=yes \
+    --enable-new-dtags \
+    --disable-rpath \
+    --disable-gold \
+    --disable-gprofng \
+    --disable-werror \
+    --with-system-zlib \
+    @CONFIGURE_FLAGS@
+
+%make_build
+
+%install
+rm -rf %{buildroot}
+%make_install -C obj-%{target_triple}
+
+%files -f %{SOURCE2}
+
+%changelog
+@CHANGELOG@
