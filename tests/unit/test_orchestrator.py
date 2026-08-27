@@ -62,6 +62,14 @@ def test_full_flow_to_plan(orchestrator):
     assert (specs_dir / "gcc-toolset-14-gcc.spec").exists()
     assert (specs_dir / "gcc-toolset-14-binutils.spec").exists()
     assert (specs_dir / "gcc-toolset-14-runtime.spec").exists()
+    spec_index = json.loads(
+        (orch.job_dir / "plan" / "spec-index.json").read_text(encoding="utf-8")
+    )
+    names = {item["name_expanded"] for item in spec_index["specs"]}
+    paths = {item["path"] for item in spec_index["specs"]}
+    assert "gcc-toolset-14-gcc.spec" in paths
+    assert "gcc-toolset-14-gcc" in names
+    assert "gcc-toolset-14-runtime" in names
 
     # 未审批时构建门必须阻断
     with pytest.raises(Exception):

@@ -33,8 +33,14 @@ from gts_agent.core.compatibility.binutils import probe_binutils
 from gts_agent.core.compatibility.gcc import analyze_gcc
 from gts_agent.core.models.compatibility import Verdict
 from gts_agent.core.models.config import JobConfig
-from gts_agent.core.models.source_lock import LockedSource, SourceLock
+from gts_agent.core.models.source_lock import (
+    LockedPatch,
+    LockedSource,
+    SourceLock,
+    sha256_file,
+)
 from gts_agent.core.probe import probe_host
+from gts_agent.core.sources.srpm import SrpmError, index_spec_dir, inspect_srpm
 from gts_agent.core.sources.tarball import fetch_tarball
 from gts_agent.core.spec.renderer import render_template_file
 from gts_agent.executors.podman import PodmanExecutor, image_exists
@@ -118,6 +124,30 @@ class Orchestrator:
                     sha256=source.sha256,
                     local_path=stored,
                 ))
+                if source.type == "srpm" and stored:
+                    srpm_path = Path(stored)
+                    extract_dir = sources_dir / f"{name}-srpm"
+                    info = self._inspect_srpm_file(srpm_path, extract_dir)
+                    lock.sources[-1].nevr = str(info.get("nevr") or "") or None
+                    index_path = sources_dir / f"{name}-srpm-index.json"
+                    index_path.write_text(
+                        json.dumps(info, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    for spec_info in info.get("specs") or []:
+                        for patch in spec_info.get("patches") or []:
+                            filename = str(patch.get("filename") or "")
+                            patch_path = extract_dir / filename
+                            if not patch_path.is_file():
+                                continue
+                            lock.patches.append(LockedPatch(
+                                id=patch_path.stem,
+                                origin=name,
+                                source_file=str(patch_path.relative_to(sources_dir)),
+                                sha256=sha256_file(patch_path),
+                                strip=1,
+                                fuzz_allowed=0,
+                            ))
             raw_sources = self.config.raw.get("sources", {}) or {}
             lock.source_date_epoch = raw_sources.get("source_date_epoch")
             repos = self.config.raw.get("repositories", {}) or {}
@@ -334,9 +364,19 @@ class Orchestrator:
                     rendered, encoding="utf-8"
                 )
 
+            spec_index = index_spec_dir(specs_dir)
+            spec_index_path = plan_dir / "spec-index.json"
+            spec_index_path.write_text(
+                json.dumps({"specs": spec_index}, indent=2, ensure_ascii=False)
+                + "\n",
+                encoding="utf-8",
+            )
+
             plan_sha = hashlib.sha256(plan_path.read_bytes()).hexdigest()
             (plan_dir / "plan.sha256").write_text(plan_sha + "\n", encoding="utf-8")
-            return build_plan, {"log_artifacts": [str(plan_path)]}
+            return build_plan, {
+                "log_artifacts": [str(plan_path), str(spec_index_path)]
+            }
 
         self.machine.run_state(
             State.GENERATE_PLAN,
@@ -371,6 +411,55 @@ class Orchestrator:
         return packages
 
     # ---------- Approval / Build gate ----------
+
+    def _inspect_srpm_file(self, srpm_path: Path, extract_dir: Path) -> Dict[str, Any]:
+        """解析输入 SRPM：宿主有 rpm 则本地查询，否则在构建容器中查询。"""
+        try:
+            return inspect_srpm(srpm_path, extract_dir)
+        except SrpmError as exc:
+            if "缺少" not in str(exc):
+                raise
+            if (
+                self.config.build_executor != "podman"
+                or not image_exists(self.config.build_image)
+            ):
+                raise
+            return self._inspect_srpm_via_podman(srpm_path, extract_dir)
+
+    def _inspect_srpm_via_podman(
+        self, srpm_path: Path, extract_dir: Path
+    ) -> Dict[str, Any]:
+        executor = PodmanExecutor(self.config.build_image, src_root=_WORKSPACE)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        script = f"""
+python3 - <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, "/src")
+from gts_agent.core.sources.srpm import inspect_srpm
+info = inspect_srpm(Path("/srpm/{srpm_path.name}"), Path("/extract"))
+Path("/extract/inspect.json").write_text(
+    json.dumps(info, indent=2, ensure_ascii=False) + "\\n"
+)
+print("srpm-inspect-ok")
+PY
+"""
+        result = executor.run(
+            ["bash", "-lc", script],
+            volumes=[
+                f"{_WORKSPACE}:/src:ro",
+                f"{srpm_path.parent.resolve()}:/srpm:ro",
+                f"{extract_dir.resolve()}:/extract:rw",
+            ],
+            env={"PYTHONPATH": "/src"},
+            workdir="/extract",
+            timeout=300,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"容器内解析 SRPM 失败: {(result.stderr + result.stdout)[-800:]}"
+            )
+        return json.loads((extract_dir / "inspect.json").read_text(encoding="utf-8"))
 
     def plan_sha256(self) -> str:
         path = self.job_dir / "plan" / "plan.sha256"

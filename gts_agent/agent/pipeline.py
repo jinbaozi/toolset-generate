@@ -14,6 +14,7 @@ from gts_agent.agent.policy_engine import load_policy
 from gts_agent.agent.state_machine import State
 from gts_agent.core.models.source_lock import SourceLock
 from gts_agent.core.sources.patches import apply_patch_manifest
+from gts_agent.core.sources.srpm import index_spec_dir
 from gts_agent.core.verify.abi import analyze_binary
 from gts_agent.core.verify.isolation import compare_snapshots, save_snapshot, take_snapshot
 from gts_agent.core.verify.report import build_provenance, build_sbom, write_json
@@ -45,6 +46,15 @@ if [ ${#rpms[@]} -eq 0 ]; then
 fi
 rpm -Uvh "${rpms[@]}"
 """
+
+
+def succeeded_report_states(summary: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """PublishReport 在 runner 内落盘时本状态仍是 RUNNING，报告中改写为 SUCCEEDED。"""
+    states = [dict(entry) for entry in summary]
+    for entry in states:
+        if entry.get("state") == "PublishReport":
+            entry["status"] = "SUCCEEDED"
+    return states
 
 
 class Pipeline:
@@ -190,6 +200,10 @@ class Pipeline:
                 raise RuntimeError("rpms/ 目录为空")
             reports_dir = self.orch.job_dir / "reports"
             reports_dir.mkdir(parents=True, exist_ok=True)
+            spec_index = index_spec_dir(self.orch.job_dir / "specs")
+            if not spec_index:
+                raise RuntimeError("specs/ 中没有可解析的 Spec")
+            write_json({"specs": spec_index}, reports_dir / "spec-index.json")
             if self.executor is not None:
                 script = """
 set -euo pipefail
@@ -199,6 +213,7 @@ import json, sys
 from pathlib import Path
 sys.path.insert(0, "/src")
 from gts_agent.agent.policy_engine import load_policy
+from gts_agent.core.sources.srpm import inspect_srpm_dir
 from gts_agent.core.verify.rpm import inspect_rpm_dir
 inspection = inspect_rpm_dir(Path("/job/rpms"), load_policy("default"))
 Path("/job/reports/rpm-inspect.json").write_text(
@@ -206,7 +221,14 @@ Path("/job/reports/rpm-inspect.json").write_text(
 )
 if not inspection["passed"]:
     raise SystemExit("RPM policy check failed")
+srpm_index = inspect_srpm_dir(Path("/job/srpms"), Path("/job/reports/srpm-extract"))
+Path("/job/reports/srpm-index.json").write_text(
+    json.dumps(srpm_index, indent=2, ensure_ascii=False) + "\\n"
+)
+if not srpm_index["passed"]:
+    raise SystemExit("SRPM parse failed")
 print("rpm-inspect-ok")
+print("srpm-index-ok")
 PY
 """
                 result = self.executor.run(
@@ -217,12 +239,15 @@ PY
                     ],
                     env={"PYTHONPATH": "/src"},
                     workdir="/job",
-                    timeout=180,
+                    timeout=300,
                 )
                 if result.returncode != 0:
                     raise ExecutorError(result.stderr[-800:] + result.stdout[-800:])
                 inspection = json.loads(
                     (reports_dir / "rpm-inspect.json").read_text(encoding="utf-8")
+                )
+                srpm_index = json.loads(
+                    (reports_dir / "srpm-index.json").read_text(encoding="utf-8")
                 )
             else:
                 policy = load_policy(self.orch.policy.policy_id)
@@ -232,9 +257,20 @@ PY
                 )
                 if not inspection["passed"]:
                     raise RuntimeError("RPM 策略检查失败")
-            return inspection, {"log_artifacts": [str(reports_dir / "rpm-inspect.json")]}
+                srpm_index = {"passed": True, "srpms": [], "note": "no-container"}
+                write_json(srpm_index, reports_dir / "srpm-index.json")
+            inspection = dict(inspection)
+            inspection["spec_index"] = spec_index
+            inspection["srpm_index"] = srpm_index
+            return inspection, {"log_artifacts": [
+                str(reports_dir / "rpm-inspect.json"),
+                str(reports_dir / "spec-index.json"),
+                str(reports_dir / "srpm-index.json"),
+            ]}
 
-        self.orch.machine.run_state(State.GENERATE_RPM, {"rpms": "collected"}, runner)
+        self.orch.machine.run_state(
+            State.GENERATE_RPM, {"rpms": "collected", "srpm_parse": True}, runner
+        )
 
     def install_and_test(self) -> None:
         if self.executor is None:
@@ -413,17 +449,19 @@ PY
                 "job": self.orch.config.name,
                 "fingerprint": self.orch.fingerprint(),
                 "packages": [path.name for path in rpms],
-                "states": self.orch.machine.summary(),
+                "states": succeeded_report_states(self.orch.machine.summary()),
             }
             write_json(summary, reports / "summary.json")
             return summary, {"log_artifacts": [
                 str(reports / "sbom.json"),
                 str(reports / "provenance.json"),
                 str(reports / "summary.json"),
+                str(reports / "spec-index.json"),
+                str(reports / "srpm-index.json"),
             ]}
 
         self.orch.machine.run_state(
-            State.PUBLISH_REPORT, {"verify": "ok"}, runner
+            State.PUBLISH_REPORT, {"verify": "ok", "indexes": True}, runner
         )
 
     def run_all(self) -> None:
