@@ -19,15 +19,25 @@ class ExecutorError(RuntimeError):
 
 
 def podman_bin() -> List[str]:
-    """返回可用的 podman 调用前缀（优先无 sudo）。"""
+    """返回可用的 podman 调用前缀。
+
+    本环境用 sudo 安装镜像，因此优先 rootful podman，避免 rootless
+    存储里看不到镜像。
+    """
     if shutil.which("podman") is None:
         raise ExecutorError("宿主未安装 podman")
+    sudo_probe = subprocess.run(
+        ["sudo", "-n", "podman", "info"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if sudo_probe.returncode == 0:
+        return ["sudo", "podman"]
     probe = subprocess.run(
         ["podman", "info"], capture_output=True, text=True, timeout=30, check=False
     )
     if probe.returncode == 0:
         return ["podman"]
-    return ["sudo", "podman"]
+    raise ExecutorError("podman 不可用（rootless 与 sudo 均失败）")
 
 
 def image_exists(image: str) -> bool:
