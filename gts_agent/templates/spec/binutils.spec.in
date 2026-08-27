@@ -45,6 +45,9 @@ It does not replace the system binutils.
 mkdir -p obj-%{target_triple}
 cd obj-%{target_triple}
 
+# AlmaLinux 9 默认仓库没有 texinfo；不构建 info 手册。
+export MAKEINFO=/bin/true
+
 ../configure \
     --build=%{target_triple} \
     --host=%{target_triple} \

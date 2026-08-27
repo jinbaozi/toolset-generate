@@ -92,6 +92,7 @@ python3 %{gts_home}/scripts/apply-patches \
 mkdir -p obj-%{target_triple}
 cd obj-%{target_triple}
 
+export MAKEINFO=/bin/true
 PATH="%{tsprefix}/bin:${PATH}" \
 ../configure \
     --build=%{target_triple} \
