@@ -55,6 +55,7 @@ class PlatformConfig:
     target_triple: str
     rpm_adapter: str
     multilib_enabled: bool = False
+    glibc_baseline: str = ""
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,8 @@ class JobConfig:
     sources: Dict[str, SourceEntry]
     policy: PolicyConfig
     packaging_layout: str = "recommended-closure"
+    build_executor: str = "local"
+    build_image: str = "gts-rhel9-builder:latest"
     raw: Dict[str, Any] = field(default_factory=dict, compare=False)
 
     def canonical_json(self) -> str:
@@ -185,12 +188,19 @@ def parse_job_config(data: Dict[str, Any]) -> JobConfig:
     if multilib_enabled:
         raise ConfigError("E-CONFIG-MULTILIB", "MVP 禁用 multilib（见方案 2.2）")
 
+    glibc_raw = platform_raw.get("glibc_baseline", {}) or {}
+    if isinstance(glibc_raw, str):
+        glibc_baseline = glibc_raw
+    else:
+        glibc_baseline = str(glibc_raw.get("version", "") or "")
+
     platform = PlatformConfig(
         distro=distro,
         architecture=architecture,
         target_triple=str(_require(platform_raw, "target_triple", "platform")),
         rpm_adapter=str(_require(platform_raw, "rpm_adapter", "platform")),
         multilib_enabled=multilib_enabled,
+        glibc_baseline=glibc_baseline,
     )
 
     base_gcc_raw = _require(toolchain, "base_gcc", "toolchain")
@@ -288,6 +298,15 @@ def parse_job_config(data: Dict[str, Any]) -> JobConfig:
             f"packaging.layout 必须是 {PACKAGING_LAYOUTS} 之一，收到 {packaging_layout!r}",
         )
 
+    build_raw = data.get("build", {}) or {}
+    build_executor = str(build_raw.get("executor", "local"))
+    if build_executor not in ("local", "mock", "podman"):
+        raise ConfigError(
+            "E-CONFIG-EXECUTOR",
+            f"build.executor 必须是 local/mock/podman，收到 {build_executor!r}",
+        )
+    build_image = str(build_raw.get("image", "gts-rhel9-builder:latest"))
+
     return JobConfig(
         schema_version=int(schema_version),
         name=str(_require(job, "name", "job")),
@@ -301,5 +320,7 @@ def parse_job_config(data: Dict[str, Any]) -> JobConfig:
         sources=sources,
         policy=policy,
         packaging_layout=packaging_layout,
+        build_executor=build_executor,
+        build_image=build_image,
         raw=data,
     )

@@ -1,0 +1,21 @@
+# RHEL 9 兼容构建根（AlmaLinux 9）：gts-agent 隔离构建执行环境。
+# 等价于 Mock chroot 的容器化实现（方案 5 E2：Rootless Podman）。
+FROM quay.io/almalinuxorg/almalinux:9
+
+RUN dnf -y update --security --setopt=install_weak_deps=False && \
+    dnf -y install --setopt=install_weak_deps=False \
+        gcc gcc-c++ make \
+        glibc-devel libstdc++-devel \
+        gmp-devel mpfr-devel libmpc-devel zlib-devel libzstd-devel \
+        binutils flex bison \
+        rpm-build rpmdevtools redhat-rpm-config createrepo_c \
+        python3 python3-pyyaml \
+        diffutils file findutils patch xz tar gzip bzip2 which perl \
+        elfutils elfutils-libelf-devel \
+    && dnf clean all
+
+# 构建用户：rpmbuild 不以 root 执行
+RUN useradd -m builder
+USER builder
+WORKDIR /home/builder
+RUN rpmdev-setuptree

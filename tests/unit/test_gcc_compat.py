@@ -27,6 +27,14 @@ def test_pass_case(base_config_dict):
     assert report.verdict == Verdict.PASS
 
 
+def test_system_nonshared_unknown_gcc_fails(base_config_dict):
+    base_config_dict["toolchain"]["target_gcc"]["version"] = "14.3.0"
+    config = parse_job_config(base_config_dict)
+    report = analyze_gcc(config, _inventory(major=11))
+    assert report.verdict == Verdict.FAIL
+    assert "E-NONSHARED-MISMATCH" in report.reason_codes
+
+
 def test_triple_mismatch_fails(base_config_dict):
     config = parse_job_config(base_config_dict)
     report = analyze_gcc(config, _inventory(dumpmachine="aarch64-redhat-linux"))

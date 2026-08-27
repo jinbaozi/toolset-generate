@@ -83,6 +83,10 @@ def cmd_approve(args: argparse.Namespace) -> int:
         comment=args.comment or "",
     )
     print(f"审批记录: {record.scope} {record.decision} by {record.approver}")
+    if args.decision == "reject":
+        from gts_agent.agent.state_machine import State
+        orch.machine.freeze(State.APPROVAL, f"{args.scope} 被 {args.approver} 拒绝")
+        return 3
     return 0
 
 
@@ -94,27 +98,45 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"构建被审批门阻断: {exc}", file=sys.stderr)
         return 3
 
-    from gts_agent.executors.mock import (
-        build_srpm_plan, execute_plan, mock_available,
-    )
-    spec = orch.job_dir / "specs" / f"gcc-toolset-{orch.config.toolset_id}-gcc.spec"
-    plan = build_srpm_plan(
-        mock_config=args.mock_config,
-        spec_path=spec,
-        sources_dir=orch.job_dir / "sources",
-        result_dir=orch.job_dir / "rpms",
-    )
-    logs = execute_plan(plan, orch.job_dir / "logs", dry_run=not args.execute)
     if not args.execute:
-        print("已生成 Mock 命令计划（dry-run）；使用 --execute 在具备 Mock 的环境中执行:")
+        from gts_agent.executors.mock import build_srpm_plan, execute_plan, mock_available
+        spec = orch.job_dir / "specs" / f"gcc-toolset-{orch.config.toolset_id}-gcc.spec"
+        plan = build_srpm_plan(
+            mock_config=args.mock_config,
+            spec_path=spec,
+            sources_dir=orch.job_dir / "sources",
+            result_dir=orch.job_dir / "rpms",
+        )
+        logs = execute_plan(plan, orch.job_dir / "logs", dry_run=True)
+        print("dry-run：已生成构建计划。使用 --execute 在隔离容器中执行完整流水线。")
         for log in logs:
             print(f"  {log}")
-        if not mock_available():
+        if orch.config.build_executor == "podman":
+            print(f"将使用 Podman 镜像 {orch.config.build_image}")
+        elif not mock_available():
             print("提示: 当前宿主未安装 mock。")
-    else:
-        print("Mock 构建完成，日志:")
-        for log in logs:
-            print(f"  {log}")
+        return 0
+
+    try:
+        orch.run_pipeline()
+    except Exception as exc:
+        print(f"构建流水线失败: {exc}", file=sys.stderr)
+        return 2
+    print("流水线完成。报告目录:", orch.job_dir / "reports")
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    orch = _load_orchestrator(args)
+    from gts_agent.agent.pipeline import Pipeline
+    try:
+        pipeline = Pipeline(orch)
+        pipeline.install_and_test()
+        pipeline.publish_report()
+    except Exception as exc:
+        print(f"验证失败: {exc}", file=sys.stderr)
+        return 2
+    print("验证完成:", orch.job_dir / "reports" / "summary.json")
     return 0
 
 
@@ -184,12 +206,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--comment")
     p.set_defaults(func=cmd_approve)
 
-    p = sub.add_parser("build", help="经过审批门后生成/执行 Mock 构建计划")
+    p = sub.add_parser("build", help="经过审批门后执行隔离构建流水线")
     add_common(p)
     p.add_argument("--mock-config", default="default")
     p.add_argument("--execute", action="store_true",
-                   help="实际执行 Mock（默认 dry-run 只生成命令计划）")
+                   help="实际执行隔离构建（默认 dry-run）")
     p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser("verify", help="安装已构建 RPM 并运行验证矩阵")
+    add_common(p)
+    p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("status", help="查看状态机进度")
     add_common(p)

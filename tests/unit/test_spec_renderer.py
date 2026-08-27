@@ -42,6 +42,8 @@ def _gcc_tokens():
         "SOURCE_DIR": "gcc-14.2.1",
         "LANGUAGES": "c,c++",
         "CONFIGURE_FLAGS": "--disable-multilib",
+        "GCC_CONFIGURE_FLAGS": "--disable-multilib",
+        "BINUTILS_CONFIGURE_FLAGS": "",
         "BOOTSTRAP_TARGET": "bootstrap",
         "VALIDATION_PROFILE": "production",
         "RUNTIME_EVR": "14.2.1-1",
@@ -49,6 +51,8 @@ def _gcc_tokens():
         "BINUTILS_MIN_EVR": "2.41",
         "BINUTILS_VERSION": "2.41",
         "RUNTIME_VERSION": "14.2.1",
+        "LIB_NAME": "lib64",
+        "GLIBC_BASELINE": "2.34",
         "CHANGELOG": "* initial",
     }
 
@@ -57,7 +61,7 @@ def test_render_gcc_template():
     rendered = render_template_file(TEMPLATE_DIR / "gcc.spec.in", _gcc_tokens())
     assert "Name:           %{tsname}-gcc" in rendered
     assert "@" not in rendered.replace("%{?_isa}", "")  # 无残留占位符（粗检）
-    assert "%files -f %{SOURCE4}" in rendered
+    assert "%files -f %{_builddir}/manifests/gcc.files" in rendered
     assert "Provides:       gcc-toolset(%{toolset_id})" in rendered
     # 不提供裸 gcc capability
     assert "\nProvides:       gcc\n" not in rendered

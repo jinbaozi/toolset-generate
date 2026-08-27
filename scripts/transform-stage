@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""rpmbuild %install 内调用：按运行时策略转换 staging 树。"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gts_agent.core.verify.transform import TransformError, transform_stage  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stage-root", required=True)
+    parser.add_argument("--toolset-prefix", required=True)
+    parser.add_argument("--strategy", required=True,
+                        choices=["system-nonshared", "private-runtime"])
+    parser.add_argument("--system-libdir", default="/usr/lib64")
+    args = parser.parse_args()
+    try:
+        actions = transform_stage(
+            stage_root=Path(args.stage_root),
+            toolset_prefix=args.toolset_prefix,
+            runtime_strategy=args.strategy,
+            system_libdir=args.system_libdir,
+        )
+    except TransformError as exc:
+        print(f"stage 转换失败: {exc}", file=sys.stderr)
+        return 1
+    for action in actions:
+        print(action)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

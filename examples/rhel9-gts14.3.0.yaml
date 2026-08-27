@@ -1,0 +1,77 @@
+# RHEL 9 / GCC Toolset 14.3.0 最小工具集（private-runtime）。
+# 源码使用已锁定的本地 tarball；构建在 AlmaLinux 9 容器中执行。
+schema_version: 1
+
+job:
+  name: rhel9-gts14.3.0
+  toolset_id: "14"
+  mode: qualified-build
+
+platform:
+  distro:
+    id: rhel
+    major: 9
+  architecture: x86_64
+  target_triple: x86_64-redhat-linux
+  rpm_adapter: rpm-4.16
+  glibc_baseline:
+    version: "2.34"
+  multilib:
+    enabled: false
+
+toolchain:
+  base_gcc:
+    source: system
+    executable: /usr/bin/gcc
+    expected_major: 11
+  target_gcc:
+    version: 14.3.0
+    languages: [c, cxx]
+    bootstrap: bootstrap
+    source_ref: gcc-14.3.0-upstream
+  binutils:
+    version: "2.41"
+    source_ref: binutils-2.41-upstream
+    rebuild_with_target_gcc: false
+
+toolset:
+  name: gcc-toolset-14
+  root: /opt/rh/gcc-toolset-14/root
+  prefix: /opt/rh/gcc-toolset-14/root/usr
+  runtime_strategy: private-runtime
+  embed_application_runpath: false
+  modify_global_alternatives: false
+  modify_ld_so_conf: false
+
+sources:
+  gcc:
+    type: tarball
+    uri: cache/sources/gcc-14.3.0.tar.xz
+    sha256: e0dc77297625631ac8e50fa92fffefe899a4eb702592da5c32ef04e2293aca3a
+  binutils:
+    type: tarball
+    uri: cache/sources/binutils-2.41.tar.xz
+    sha256: ae9a5789e23459e59606e6714723f2d3ffc31c03174191ef0d015bdf06007450
+  allow_network: false
+  source_date_epoch: 1756243200
+
+build:
+  executor: podman
+  image: gts-rhel9-builder:latest
+  max_parallel_jobs: 4
+  timeout_seconds: 28800
+
+packaging:
+  layout: recommended-closure
+  strict_file_manifest: true
+  terminate_on_unowned_files: true
+
+policy:
+  max_transient_retries: 3
+  max_auto_repairs: 2
+  require_patch_approval: true
+  require_private_runtime_approval: true
+  require_publish_approval: true
+  fail_on_patch_fuzz: true
+  fail_on_system_path_write: true
+  fail_on_glibc_baseline_exceed: true

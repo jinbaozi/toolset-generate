@@ -84,30 +84,62 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+_BINUTILS_TOOLS = {
+    "as", "ld", "ld.bfd", "ar", "ranlib", "nm", "objdump", "readelf",
+    "strip", "objcopy", "strings", "addr2line", "c++filt", "size",
+    "elfedit", "gprof", "dwp", "coffdump", "srconv", "sysdump",
+}
+_CXX_DRIVERS = {"g++", "c++"}
+
+# 私有运行时 DSO 的 SONAME 前缀（private-runtime 模式归入 runtime-libs）
+_RUNTIME_DSO_PREFIXES = (
+    "libstdc++.so.", "libgcc_s.so.", "libatomic.so.", "libgomp.so.",
+    "libquadmath.so.", "libitm.so.", "libssp.so.",
+)
+
+
+def _strip_triple_prefix(name: str) -> str:
+    """去掉 x86_64-redhat-linux- 之类的 triple 前缀，返回基础工具名。"""
+    parts = name.split("-")
+    if len(parts) >= 4 and "linux" in parts:
+        idx = max(i for i, part in enumerate(parts) if "linux" in part)
+        rest = "-".join(parts[idx + 1:])
+        return rest or name
+    return name
+
+
 # 文件角色 -> 子包分类规则（方案 11.2、15.1）。按顺序匹配，首个命中生效。
 def classify_path(
     install_path: str,
     toolset_prefix: str,
     runtime_strategy: str,
+    component: str = "gcc",
 ) -> str:
+    """component:
+    - "gcc"：GCC 构建根，拆分为 gcc/gcc-c++/libstdc++-devel(/runtime-libs)
+    - "binutils"/"runtime"：单包构建根，全部文件归属该包
+    """
+    if component != "gcc":
+        return component
+
     relative = install_path[len(toolset_prefix):].lstrip("/") if install_path.startswith(
         toolset_prefix
     ) else install_path
     name = os.path.basename(install_path)
+    base_name = _strip_triple_prefix(name)
 
-    binutils_tools = {
-        "as", "ld", "ld.bfd", "ar", "ranlib", "nm", "objdump", "readelf",
-        "strip", "objcopy", "strings", "addr2line", "c++filt", "size",
-        "elfedit", "gprof", "dwp",
-    }
-    cxx_drivers = {"g++", "c++"}
+    top = relative.split("/", 1)[0] if "/" in relative else relative
 
     if relative.startswith("bin/"):
-        if name in binutils_tools:
+        if base_name in _BINUTILS_TOOLS or name in _BINUTILS_TOOLS:
             return "binutils"
-        if name in cxx_drivers:
+        if name in _CXX_DRIVERS or base_name in _CXX_DRIVERS or \
+                name.endswith(("-g++", "-c++")):
             return "gcc-c++"
         return "gcc"
+    # binutils tooldir：<prefix>/<triple>/bin、<prefix>/<triple>/lib/ldscripts
+    if "linux" in top and top not in ("lib", "lib64", "libexec"):
+        return "binutils"
     if relative.startswith("libexec/gcc/"):
         if name in ("cc1plus",):
             return "gcc-c++"
@@ -131,22 +163,28 @@ def classify_path(
                 "E-MANIFEST",
                 f"system-nonshared 模式不应打包私有 libstdc++ DSO: {install_path}",
             )
-    if name.startswith("libgcc_s.so."):
+    if any(name.startswith(prefix) for prefix in _RUNTIME_DSO_PREFIXES):
         if runtime_strategy == "private-runtime":
             return "runtime-libs"
         raise ManifestError(
             "E-MANIFEST",
-            f"system-nonshared 模式不应打包私有 libgcc_s DSO: {install_path}",
+            f"system-nonshared 模式不应打包私有运行时 DSO: {install_path}",
         )
-    if relative.startswith(("lib/gcc/", "lib64/", "lib/")):
+    # libstdc++ pretty printers / python 模块
+    if relative.startswith("share/gcc-") or "/python/" in relative:
+        return "libstdc++-devel"
+    if relative.startswith(("lib/gcc/", "lib64/", "lib/", "libexec/")):
         return "gcc"
-    if relative.startswith(("share/man/man1/",)):
-        if name.split(".")[0] in binutils_tools:
+    if relative.startswith("share/man/man1/"):
+        stem = name.split(".")[0]
+        if stem in _BINUTILS_TOOLS or _strip_triple_prefix(stem) in _BINUTILS_TOOLS:
             return "binutils"
+        if stem in _CXX_DRIVERS or stem.endswith(("g++", "c++")):
+            return "gcc-c++"
         return "gcc"
-    if relative.startswith("share/"):
-        return "runtime"
-    return "runtime"
+    if relative.startswith(("include/", "share/")):
+        return "gcc"
+    return "gcc"
 
 
 def discover_staged_files(
@@ -154,12 +192,14 @@ def discover_staged_files(
     toolset_root: str,
     toolset_prefix: str,
     runtime_strategy: str,
+    component: str = "gcc",
 ) -> FileManifest:
-    """遍历 staging 根，生成完整文件 manifest。
+    """遍历 staging 根，生成完整文件 manifest（含目录归属）。
 
     stage_root: DESTDIR（如 work/JOB/stage）
     toolset_root: /opt/rh/gcc-toolset-N/root
     toolset_prefix: /opt/rh/gcc-toolset-N/root/usr
+    component: gcc（拆分）| binutils | runtime（单包）
     """
     stage_root = stage_root.resolve()
     staged_toolset = stage_root / toolset_root.lstrip("/")
@@ -203,9 +243,93 @@ def discover_staged_files(
                     mode=format(full.stat().st_mode & 0o7777, "04o"),
                     sha256=_sha256(full),
                 )
-            entry.package = classify_path(install_path, toolset_prefix, runtime_strategy)
+            entry.package = classify_path(
+                install_path, toolset_prefix, runtime_strategy, component
+            )
             manifest.entries.append(entry)
+
+    _scan_extra_runtime_paths(manifest, stage_root, toolset_prefix, runtime_strategy, component)
+    _assign_directories(manifest, stage_root, staged_toolset, component)
     return manifest
+
+
+def _scan_extra_runtime_paths(
+    manifest: FileManifest,
+    stage_root: Path,
+    toolset_prefix: str,
+    runtime_strategy: str,
+    component: str,
+) -> None:
+    """扫描 Toolset 根之外、策略允许的 wrapper/宏路径。"""
+    extra = [
+        stage_root / "usr" / "bin",
+        stage_root / "usr" / "lib" / "gcc-toolset",
+        stage_root / "usr" / "lib" / "rpm" / "macros.d",
+    ]
+    seen = {entry.path for entry in manifest.entries}
+    for root in extra:
+        if not root.exists():
+            continue
+        for full in sorted(root.rglob("*")):
+            if not full.is_file() and not full.is_symlink():
+                continue
+            install_path = "/" + str(full.relative_to(stage_root))
+            if install_path in seen:
+                continue
+            if full.is_symlink():
+                entry = ManifestEntry(
+                    path=install_path,
+                    file_type="symlink",
+                    symlink_target=os.readlink(full),
+                    mode="0777",
+                )
+            else:
+                entry = ManifestEntry(
+                    path=install_path,
+                    file_type="regular",
+                    mode=format(full.stat().st_mode & 0o7777, "04o"),
+                    sha256=_sha256(full),
+                )
+            entry.package = classify_path(
+                install_path, toolset_prefix, runtime_strategy, component
+            )
+            manifest.entries.append(entry)
+            seen.add(install_path)
+
+
+def _assign_directories(
+    manifest: FileManifest,
+    stage_root: Path,
+    staged_toolset: Path,
+    component: str,
+) -> None:
+    """为 Toolset 根下的每个目录生成 %dir 条目。
+
+    目录归属规则：仅被一个包使用 -> 该包；被多个包共享 -> 组件默认包
+    （RPM 允许多包共同拥有相同属性的目录）。
+    """
+    dir_owners: Dict[str, set] = {}
+    for entry in manifest.entries:
+        parent = os.path.dirname(entry.path)
+        toolset_root_str = "/" + str(staged_toolset.relative_to(stage_root))
+        while parent.startswith(toolset_root_str) and parent != "/":
+            dir_owners.setdefault(parent, set()).add(entry.package)
+            if parent == toolset_root_str:
+                break
+            parent = os.path.dirname(parent)
+
+    default_package = component if component != "gcc" else "gcc"
+    for dir_path in sorted(dir_owners):
+        owners = dir_owners[dir_path]
+        package = next(iter(owners)) if len(owners) == 1 else default_package
+        full = stage_root / dir_path.lstrip("/")
+        mode = format(full.stat().st_mode & 0o7777, "04o") if full.exists() else "0755"
+        manifest.entries.append(ManifestEntry(
+            path=dir_path,
+            file_type="directory",
+            mode=mode,
+            package=package,
+        ))
 
 
 def write_files_lists(manifest: FileManifest, output_dir: Path) -> Dict[str, Path]:
@@ -219,7 +343,12 @@ def write_files_lists(manifest: FileManifest, output_dir: Path) -> Dict[str, Pat
                 f"存在未归属文件: {[e.path for e in entries][:10]}",
             )
         target = output_dir / f"{package}.files"
-        lines = [entry.path for entry in sorted(entries, key=lambda e: e.path)]
+        lines = []
+        for entry in sorted(entries, key=lambda e: (e.file_type != "directory", e.path)):
+            if entry.file_type == "directory":
+                lines.append(f"%dir {entry.path}")
+            else:
+                lines.append(entry.path)
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
         outputs[package] = target
     return outputs

@@ -35,8 +35,20 @@ gts-agent plan --config examples/cs9-gts14.yaml
 gts-agent approve --config examples/cs9-gts14.yaml \
   --plan-sha256 <SHA256> --decision approve --approver release-engineer
 
-# 6. 经过审批门后生成/执行 Mock 构建计划（默认 dry-run）
-gts-agent build --config examples/cs9-gts14.yaml --mock-config cs9-x86_64
+# 6. 经过审批门后执行隔离构建（RHEL 9 / GCC 14.3.0 最小工具集）
+gts-agent plan --config examples/rhel9-gts14.3.0.yaml --skip-probes
+gts-agent approve --config examples/rhel9-gts14.3.0.yaml \
+  --plan-sha256 <SHA256> --decision approve --approver release-engineer
+gts-agent approve --config examples/rhel9-gts14.3.0.yaml \
+  --plan-sha256 <SHA256> --decision approve --approver release-engineer \
+  --scope private-runtime
+gts-agent build --config examples/rhel9-gts14.3.0.yaml --execute
+
+构建镜像：
+
+```bash
+sudo podman build --network=host -t gts-rhel9-builder:latest containers/rhel9-builder
+```
 
 # 查看状态机进度 / 解释失败
 gts-agent status --config examples/cs9-gts14.yaml
@@ -92,8 +104,7 @@ Discover -> ResolveSources -> AnalyzeCompatibility -> GeneratePlan -> Approval
  -> CompileLinkTest -> AbiSymbolTest -> IsolationTest -> PublishReport
 ```
 
-MVP 中可端到端执行到 `Approval`；`Build` 及之后阶段生成完整 Mock 命令计划，
-在具备 Mock/冻结仓库的 RHEL/CentOS Stream 构建环境中执行。
+Approval 之后由 `gts-agent build --execute` 在 Podman（RHEL 9 兼容构建根）中继续执行到 PublishReport。
 
 ## 测试
 
@@ -105,7 +116,7 @@ python3 -m pytest tests -q
 
 - 发行版：RHEL/CentOS Stream 9（rpm-4.16、SCL 激活）与 10（rpm-4.19、`gcc-toolset-N-env` 激活）；
 - 架构：x86_64、aarch64；native 构建；语言 C/C++；multilib 禁用；
-- 黄金参考组合：CS9/GTS14（nonshared 基线 110）、CS10/GTS15（nonshared 基线 140），
-  见 `gts_agent/reference_profiles/`。
+- 黄金参考组合：CS9/GTS14（nonshared 基线 110）、CS10/GTS15（nonshared 基线 140）；
+- 本项目适配：RHEL 9 / GCC 14.3.0 最小工具集（`private-runtime`），见 `examples/rhel9-gts14.3.0.yaml`。
 
-其他组合会被资格判定标记为 `EXPERIMENTAL` 或 `UNSUPPORTED` 并快速失败。
+其他 `system-nonshared` 组合若没有已验证 compat patch，资格判定会快速失败。

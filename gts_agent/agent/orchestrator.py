@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -34,9 +35,13 @@ from gts_agent.core.models.compatibility import Verdict
 from gts_agent.core.models.config import JobConfig
 from gts_agent.core.models.source_lock import LockedSource, SourceLock
 from gts_agent.core.probe import probe_host
+from gts_agent.core.sources.tarball import fetch_tarball
 from gts_agent.core.spec.renderer import render_template_file
+from gts_agent.executors.podman import PodmanExecutor, image_exists
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "spec"
+_PKG_ROOT = Path(__file__).resolve().parent.parent
+_WORKSPACE = _PKG_ROOT.parent
 
 
 class Orchestrator:
@@ -54,8 +59,18 @@ class Orchestrator:
 
     def discover(self) -> Dict[str, Any]:
         def runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-            inventory = probe_host(self.config.base_gcc.executable)
-            data = inventory.to_dict()
+            if self.config.build_executor == "podman":
+                if not image_exists(self.config.build_image):
+                    raise RuntimeError(
+                        f"Podman 镜像 {self.config.build_image} 不存在"
+                    )
+                executor = PodmanExecutor(
+                    self.config.build_image, src_root=_WORKSPACE
+                )
+                data = executor.probe_inventory(self.config.base_gcc.executable)
+            else:
+                inventory = probe_host(self.config.base_gcc.executable)
+                data = inventory.to_dict()
             out = self.job_dir / "inventory.json"
             out.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -71,15 +86,39 @@ class Orchestrator:
 
     def resolve_sources(self) -> SourceLock:
         def runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            sources_dir = self.job_dir / "sources"
+            sources_dir.mkdir(parents=True, exist_ok=True)
+            cache_dir = _WORKSPACE / "cache" / "sources"
+            cache_dir.mkdir(parents=True, exist_ok=True)
             lock = SourceLock()
+            empty_manifest = (
+                _PKG_ROOT / "templates" / "patch-manifest.empty.yaml"
+            )
+            shutil.copy2(empty_manifest, sources_dir / "patch-manifest.yaml")
+            raw_sources = self.config.raw.get("sources", {}) or {}
+            allow_network = bool(raw_sources.get("allow_network", False))
             for name, source in self.config.sources.items():
+                uri = _resolve_source_uri(source.uri, cache_dir)
+                local_path = Path(uri)
+                if local_path.exists() or (
+                    (uri.startswith("http://") or uri.startswith("https://"))
+                    and allow_network
+                ):
+                    local = fetch_tarball(uri, cache_dir, source.sha256)
+                    dest = sources_dir / local.name
+                    if local.resolve() != dest.resolve():
+                        shutil.copy2(local, dest)
+                    stored = str(dest)
+                else:
+                    stored = None
                 lock.sources.append(LockedSource(
                     name=name,
                     type=source.type,
                     uri=source.uri,
                     sha256=source.sha256,
+                    local_path=stored,
                 ))
-            raw_sources = self.config.raw.get("sources", {})
+            raw_sources = self.config.raw.get("sources", {}) or {}
             lock.source_date_epoch = raw_sources.get("source_date_epoch")
             repos = self.config.raw.get("repositories", {}) or {}
             lock.repo_snapshot_id = str(repos.get("snapshot_id", ""))
@@ -173,8 +212,15 @@ class Orchestrator:
             "--enable-checking=release",
             "--with-system-zlib",
             "--disable-multilib",
+            "--disable-libsanitizer",
+            "--disable-libquadmath",
+            "--disable-libgomp",
+            "--disable-libitm",
+            "--disable-nls",
             f"--with-pkgversion=Internal GCC Toolset {self.config.toolset_id}",
         ])
+        if self.config.target_gcc.bootstrap == "disable-bootstrap":
+            flags.append("--disable-bootstrap")
         return flags
 
     def generate_plan(self) -> Path:
@@ -192,6 +238,14 @@ class Orchestrator:
             languages = ",".join(
                 "c++" if lang == "cxx" else lang
                 for lang in self.config.target_gcc.languages
+            )
+            lib_name = "lib64"
+            glibc_baseline = self.config.platform.glibc_baseline or "2.34"
+            bootstrap_target = (
+                "profiledbootstrap"
+                if self.config.target_gcc.bootstrap == "profiledbootstrap"
+                else ("" if self.config.target_gcc.bootstrap == "disable-bootstrap"
+                      else "bootstrap")
             )
 
             build_plan: Dict[str, Any] = {
@@ -253,18 +307,17 @@ class Orchestrator:
                 "SOURCE_VERSION": self.config.target_gcc.version,
                 "SOURCE_DIR": f"gcc-{self.config.target_gcc.version}",
                 "LANGUAGES": languages,
-                "CONFIGURE_FLAGS": " \\\n    ".join(configure_flags),
-                "BOOTSTRAP_TARGET": (
-                    "profiledbootstrap"
-                    if self.config.target_gcc.bootstrap == "profiledbootstrap"
-                    else "bootstrap"
-                ),
+                "GCC_CONFIGURE_FLAGS": " \\\n    ".join(configure_flags),
+                "BINUTILS_CONFIGURE_FLAGS": "",
+                "BOOTSTRAP_TARGET": bootstrap_target,
                 "VALIDATION_PROFILE": "production",
                 "RUNTIME_EVR": f"{self.config.target_gcc.version}-1",
                 "BINUTILS_EVR": f"{self.config.binutils.version}-1",
                 "BINUTILS_MIN_EVR": self.config.binutils.version,
                 "BINUTILS_VERSION": self.config.binutils.version,
                 "RUNTIME_VERSION": self.config.target_gcc.version,
+                "LIB_NAME": lib_name,
+                "GLIBC_BASELINE": glibc_baseline,
                 "CHANGELOG": (
                     f"* Initial generated spec for gcc-toolset-{self.config.toolset_id}"
                 ),
@@ -340,3 +393,21 @@ class Orchestrator:
                 lock_path.read_bytes()
             ).hexdigest()
         return job_fingerprint(components)
+
+    def run_pipeline(self) -> None:
+        from gts_agent.agent.pipeline import Pipeline
+        Pipeline(self).run_all()
+
+
+def _resolve_source_uri(uri: str, cache_dir: Path) -> str:
+    path = Path(uri)
+    if path.exists():
+        return str(path.resolve())
+    for root in (Path.cwd(), _WORKSPACE, cache_dir):
+        candidate = root / uri
+        if candidate.exists():
+            return str(candidate.resolve())
+        candidate = root / path.name
+        if candidate.exists():
+            return str(candidate.resolve())
+    return uri

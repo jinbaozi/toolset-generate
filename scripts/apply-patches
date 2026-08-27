@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""rpmbuild %prep 内调用：按 manifest 零 fuzz 应用补丁。
+
+用法: apply-patches --manifest patch-manifest.yaml --source-root . \
+        [--patches-dir DIR] [--report report.json] [--require-zero-fuzz]
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gts_agent.core.sources.patches import PatchError, apply_patch_manifest  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--source-root", required=True)
+    parser.add_argument("--patches-dir")
+    parser.add_argument("--report")
+    parser.add_argument("--require-zero-fuzz", action="store_true", default=True)
+    args = parser.parse_args()
+
+    try:
+        report = apply_patch_manifest(
+            manifest_path=Path(args.manifest),
+            source_root=Path(args.source_root),
+            patches_dir=Path(args.patches_dir) if args.patches_dir else None,
+        )
+    except PatchError as exc:
+        print(f"补丁应用失败: {exc}", file=sys.stderr)
+        return 1
+
+    if args.report:
+        report.save(Path(args.report))
+    print(f"已应用补丁: {len(report.applications)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,27 @@
+# 黄金参考 Profile：RHEL 9 / GCC 14.3.0 最小工具集（本项目适配，非 Red Hat GTS 14.2.1 逐字复刻）。
+# 14.3.0 没有与 GTS14 完全对应的 libstdc++ compat patch，因此默认 private-runtime。
+schema_version: 1
+profile_id: rhel9-gts14.3.0
+distro:
+  id: rhel
+  major: 9
+architectures: [x86_64, aarch64]
+toolset:
+  id: "14"
+  name: gcc-toolset-14
+  root: /opt/rh/gcc-toolset-14/root
+  framework: scl-utils
+  activation: env-wrapper
+runtime_strategy: private-runtime
+target_gcc:
+  version: 14.3.0
+  major: 14
+  source: https://ftp.gnu.org/gnu/gcc/gcc-14.3.0/gcc-14.3.0.tar.xz
+target_binutils:
+  version: "2.41"
+  source: https://sourceware.org/pub/binutils/releases/binutils-2.41.tar.xz
+rpm_adapter: rpm-4.16
+notes:
+  - "最小语言集：C、C++；关闭 sanitizer/OpenMP/quadmath/ITM/NLS/multilib"
+  - "private-runtime：私有 libstdc++.so.6 / libgcc_s.so.1 仅经 enable/wrapper 使用"
+  - "禁止写入 /etc/ld.so.conf* 与全局 alternatives"

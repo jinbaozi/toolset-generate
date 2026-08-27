@@ -109,8 +109,32 @@ def check_bootstrap(
         ))
 
 
+def check_runtime_strategy(config: JobConfig, report: CompatibilityReport) -> None:
+    """system-nonshared 仅允许已验证的黄金 profile 版本组合。"""
+    if config.toolset.runtime_strategy != "system-nonshared":
+        return
+    known = {
+        (9, "14.2.1"),
+        (10, "15.2.1"),
+    }
+    key = (config.platform.distro.major, config.target_gcc.version)
+    if key not in known:
+        report.add(Finding(
+            verdict=Verdict.FAIL,
+            reason_code="E-NONSHARED-MISMATCH",
+            message=(
+                f"system-nonshared 没有与 {config.platform.distro.id} "
+                f"{config.platform.distro.major} / GCC {config.target_gcc.version} "
+                "对应的已验证 compat patch；请改用 private-runtime 或接入已验证 profile"
+            ),
+            allowed_actions=["use_private_runtime", "port_compat_patch"],
+            forbidden_actions=["copy_base_gcc_nonshared", "forge_symbols"],
+        ))
+
+
 def analyze_gcc(config: JobConfig, inventory: Inventory) -> CompatibilityReport:
     report = CompatibilityReport()
     check_triple(config, inventory, report)
     check_bootstrap(config, inventory, report)
+    check_runtime_strategy(config, report)
     return report
