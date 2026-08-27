@@ -1,0 +1,50 @@
+# gts-agent 默认策略（policy-as-data）。
+# 硬性禁止项来自方案 2.3、10.7、10.9；不允许在配置里放宽。
+schema_version: 1
+policy_id: default
+version: 1
+
+retries:
+  max_transient_retries: 3
+  max_auto_repairs: 2
+
+approvals:
+  require_patch_approval: true
+  require_private_runtime_approval: true
+  require_publish_approval: true
+  require_conflicts_obsoletes_approval: true
+
+hard_blocks:
+  fail_on_patch_fuzz: true
+  fail_on_system_path_write: true
+  fail_on_glibc_baseline_exceed: true
+  fail_on_symbol_tampering: true
+  fail_on_nonshared_from_base_gcc: true
+  fail_on_ld_so_conf_modification: true
+  fail_on_global_alternatives_modification: true
+
+# 生成的 RPM 允许写入的路径前缀；其余一律 E-ISOLATION。
+allowed_install_prefixes:
+  - /opt/rh/
+  - /usr/bin/gcc-toolset-        # 仅 env wrapper：gcc-toolset-N-env
+  - /usr/lib/gcc-toolset/        # 仅 env source 文件
+  - /usr/lib/rpm/macros.d/macros.gts-  # 仅 Toolset 私有宏
+  - /usr/lib/.build-id           # rpm 自动生成的 ELF build-id 索引
+
+# 绝不允许出现在 %files 的路径（覆盖系统工具即阻断）。
+forbidden_install_paths:
+  - /usr/bin/gcc
+  - /usr/bin/g++
+  - /usr/bin/cc
+  - /usr/bin/c++
+  - /usr/bin/ld
+  - /usr/bin/as
+  - /etc/ld.so.conf
+  - /etc/ld.so.conf.d
+  - /usr/lib64/libstdc++.so.6
+  - /lib64/libgcc_s.so.1
+
+forbidden_provides:
+  - gcc
+  - gcc-c++
+  - c++-compiler

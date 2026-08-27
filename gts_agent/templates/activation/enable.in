@@ -1,0 +1,16 @@
+# gts-agent 生成的 Toolset enable 脚本骨架（方案 20.5）。
+# 用法：source /opt/rh/gcc-toolset-__GTS_ID__/enable
+
+_gts_root="/opt/rh/gcc-toolset-__GTS_ID__/root"
+_gts_prefix="${_gts_root}/usr"
+
+export PATH="${_gts_prefix}/bin${PATH:+:${PATH}}"
+export MANPATH="${_gts_prefix}/share/man${MANPATH:+:${MANPATH}}"
+export INFOPATH="${_gts_prefix}/share/info${INFOPATH:+:${INFOPATH}}"
+export PKG_CONFIG_PATH="${_gts_prefix}/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+
+if [ "__GTS_STRATEGY__" = "private-runtime" ]; then
+    export LD_LIBRARY_PATH="${_gts_prefix}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+
+unset _gts_root _gts_prefix

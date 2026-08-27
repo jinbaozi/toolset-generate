@@ -1,0 +1,77 @@
+# 黄金参考组合 B：CentOS Stream 10 / GCC Toolset 15 / x86_64 / system-nonshared
+schema_version: 1
+
+job:
+  name: cs10-gts15-reference
+  toolset_id: "15"
+  mode: qualified-build
+
+platform:
+  distro:
+    id: centos-stream
+    major: 10
+  architecture: x86_64
+  target_triple: x86_64-redhat-linux
+  rpm_adapter: rpm-4.19
+  glibc_baseline:
+    resolve_from_buildroot: true
+  multilib:
+    enabled: false
+
+toolchain:
+  base_gcc:
+    source: system
+    executable: /usr/bin/gcc
+    expected_major: 14
+
+  target_gcc:
+    version: 15.2.1
+    languages: [c, cxx]
+    bootstrap: bootstrap
+    source_ref: gcc-15-redhat-profile
+
+  binutils:
+    version: "2.44"
+    source_ref: binutils-gts15-profile
+    rebuild_with_target_gcc: true
+
+toolset:
+  name: gcc-toolset-15
+  root: /opt/rh/gcc-toolset-15/root
+  prefix: /opt/rh/gcc-toolset-15/root/usr
+  runtime_strategy: system-nonshared
+  embed_application_runpath: false
+  modify_global_alternatives: false
+  modify_ld_so_conf: false
+
+sources:
+  gcc:
+    type: srpm
+    uri: "<approved-source-location>/gcc-toolset-15-gcc-15.2.1.src.rpm"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  binutils:
+    type: srpm
+    uri: "<approved-source-location>/gcc-toolset-15-binutils-2.44.src.rpm"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  allow_network: false
+  source_date_epoch: 1736467200
+
+repositories:
+  snapshot_id: cs10-2026-08-26
+  offline_cache: cache/rpm
+  gpg_check: true
+
+packaging:
+  layout: recommended-closure
+  strict_file_manifest: true
+  terminate_on_unowned_files: true
+
+policy:
+  max_transient_retries: 3
+  max_auto_repairs: 2
+  require_patch_approval: true
+  require_private_runtime_approval: true
+  require_publish_approval: true
+  fail_on_patch_fuzz: true
+  fail_on_system_path_write: true
+  fail_on_glibc_baseline_exceed: true

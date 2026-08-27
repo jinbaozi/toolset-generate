@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/gts-agent/job-config.schema.json",
+  "title": "gts-agent JobConfig",
+  "type": "object",
+  "required": ["schema_version", "job", "platform", "toolchain", "toolset", "sources"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "job": {
+      "type": "object",
+      "required": ["name", "toolset_id"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "toolset_id": { "type": "string", "pattern": "^[0-9]+$" },
+        "mode": { "type": "string", "enum": ["qualified-build", "experimental-build"] }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "required": ["distro", "architecture", "target_triple", "rpm_adapter"],
+      "properties": {
+        "distro": {
+          "type": "object",
+          "required": ["id", "major"],
+          "properties": {
+            "id": { "type": "string", "enum": ["centos-stream", "rhel"] },
+            "major": { "type": "integer", "enum": [9, 10] }
+          }
+        },
+        "architecture": { "type": "string", "enum": ["x86_64", "aarch64"] },
+        "target_triple": { "type": "string", "minLength": 1 },
+        "rpm_adapter": { "type": "string", "enum": ["rpm-4.16", "rpm-4.19"] },
+        "multilib": {
+          "type": "object",
+          "properties": { "enabled": { "const": false } }
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "required": ["base_gcc", "target_gcc", "binutils"],
+      "properties": {
+        "base_gcc": {
+          "type": "object",
+          "required": ["source"],
+          "properties": {
+            "source": { "type": "string" },
+            "executable": { "type": "string" },
+            "expected_major": { "type": "integer" }
+          }
+        },
+        "target_gcc": {
+          "type": "object",
+          "required": ["version", "languages", "source_ref"],
+          "properties": {
+            "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" },
+            "languages": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["c", "cxx"] },
+              "minItems": 1
+            },
+            "bootstrap": {
+              "type": "string",
+              "enum": ["bootstrap", "profiledbootstrap", "disable-bootstrap"]
+            },
+            "source_ref": { "type": "string" }
+          }
+        },
+        "binutils": {
+          "type": "object",
+          "required": ["version", "source_ref"],
+          "properties": {
+            "version": { "type": "string" },
+            "source_ref": { "type": "string" },
+            "rebuild_with_target_gcc": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "toolset": {
+      "type": "object",
+      "required": ["name", "root", "prefix", "runtime_strategy"],
+      "properties": {
+        "name": { "type": "string" },
+        "root": { "type": "string", "pattern": "^/opt/" },
+        "prefix": { "type": "string", "pattern": "^/opt/" },
+        "runtime_strategy": {
+          "type": "string",
+          "enum": ["system-nonshared", "private-runtime"]
+        },
+        "embed_application_runpath": { "type": "boolean" },
+        "modify_global_alternatives": { "const": false },
+        "modify_ld_so_conf": { "const": false }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "required": ["gcc", "binutils"],
+      "additionalProperties": true,
+      "properties": {
+        "gcc": { "$ref": "#/$defs/source" },
+        "binutils": { "$ref": "#/$defs/source" }
+      }
+    },
+    "packaging": {
+      "type": "object",
+      "properties": {
+        "layout": {
+          "type": "string",
+          "enum": ["recommended-closure", "strict-two-package"]
+        }
+      }
+    },
+    "policy": { "type": "object" }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["type", "uri", "sha256"],
+      "properties": {
+        "type": { "type": "string", "enum": ["srpm", "tarball", "git-snapshot"] },
+        "uri": { "type": "string" },
+        "sha256": { "type": "string" }
+      }
+    }
+  }
+}

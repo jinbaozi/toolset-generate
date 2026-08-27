@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""rpmbuild %check / 验证层调用：检查 staging 树。"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gts_agent.agent.policy_engine import load_policy  # noqa: E402
+from gts_agent.core.verify.stage import verify_stage  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stage-root", required=True)
+    parser.add_argument("--toolset-root", required=True)
+    parser.add_argument("--glibc-baseline", required=True)
+    parser.add_argument("--policy", default="default")
+    parser.add_argument("--report")
+    args = parser.parse_args()
+
+    policy = load_policy(args.policy)
+    result = verify_stage(
+        stage_root=Path(args.stage_root),
+        toolset_root=args.toolset_root,
+        glibc_baseline=args.glibc_baseline,
+        policy=policy,
+    )
+    if args.report:
+        result.save(Path(args.report))
+    print(f"passed={result.passed} elfs={result.scanned_elf_count} "
+          f"max_glibc={result.max_glibc_required}")
+    if not result.passed:
+        for label, items in (
+            ("buildroot_leaks", result.buildroot_leaks),
+            ("glibc_violations", result.glibc_violations),
+            ("policy_violations", result.policy_violations),
+        ):
+            for item in items:
+                print(f"{label}: {item}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

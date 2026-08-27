@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""rpmbuild %install 内调用：发现 staged 文件并生成精确 %files 清单。
+
+用法: discover-files --stage-root $RPM_BUILD_ROOT \
+        --toolset-root /opt/rh/gcc-toolset-14/root \
+        --toolset-prefix /opt/rh/gcc-toolset-14/root/usr \
+        --strategy private-runtime --component gcc \
+        --output DIR
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gts_agent.core.manifest.discover import (  # noqa: E402
+    GCC_FILE_PACKAGES,
+    GCC_PRIVATE_RUNTIME_PACKAGES,
+    ManifestError,
+    discover_staged_files,
+    write_files_lists,
+)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stage-root", required=True)
+    parser.add_argument("--toolset-root", required=True)
+    parser.add_argument("--toolset-prefix", required=True)
+    parser.add_argument("--strategy", required=True,
+                        choices=["system-nonshared", "private-runtime"])
+    parser.add_argument("--component", default="gcc",
+                        choices=["gcc", "binutils", "runtime"])
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+
+    try:
+        manifest = discover_staged_files(
+            stage_root=Path(args.stage_root),
+            toolset_root=args.toolset_root,
+            toolset_prefix=args.toolset_prefix,
+            runtime_strategy=args.strategy,
+            component=args.component,
+        )
+        output_dir = Path(args.output)
+        manifest.save(output_dir / "manifest.yaml")
+        required = {
+            "runtime": ["runtime"],
+            "binutils": ["binutils"],
+            "gcc": list(
+                GCC_PRIVATE_RUNTIME_PACKAGES
+                if args.strategy == "private-runtime"
+                else GCC_FILE_PACKAGES
+            ),
+        }[args.component]
+        outputs = write_files_lists(manifest, output_dir, required_packages=required)
+    except ManifestError as exc:
+        print(f"manifest 生成失败: {exc}", file=sys.stderr)
+        return 1
+
+    for package, path in sorted(outputs.items()):
+        count = len(path.read_text().splitlines())
+        print(f"{package}: {count} 条 -> {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

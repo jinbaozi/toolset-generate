@@ -1,0 +1,150 @@
+# 本文件由 gts-agent 生成器渲染，属于本项目 Spec 骨架，
+# 不是 Red Hat 原始 Spec。所有 %files 必须使用 -f 精确清单。
+
+%global toolset_id       @TOOLSET_ID@
+%global tsname           gcc-toolset-%{toolset_id}
+%global gcc_major        @GCC_MAJOR@
+%global target_triple    @TARGET_TRIPLE@
+%global tsroot           /opt/rh/%{tsname}/root
+%global tsprefix         %{tsroot}/usr
+%global tslib            @LIB_NAME@
+%global runtime_strategy @RUNTIME_STRATEGY@
+%global glibc_baseline   @GLIBC_BASELINE@
+%global gts_home %{?gts_agent_home:%{gts_agent_home}}%{!?gts_agent_home:%{_sourcedir}/gts-agent}
+
+Name:           %{tsname}-gcc
+Version:        @GCC_VERSION@
+Release:        @RELEASE@%{?dist}
+Summary:        Parallel-installable GCC %{gcc_major} for %{tsname}
+License:        @LICENSE_EXPRESSION@
+URL:            @PROJECT_URL@
+
+Source0:        gcc-@SOURCE_VERSION@.tar.xz
+Source1:        source.lock.json
+Source2:        patch-manifest.yaml
+
+BuildRequires:  make
+BuildRequires:  gcc
+BuildRequires:  gcc-c++
+BuildRequires:  glibc-devel
+BuildRequires:  binutils
+BuildRequires:  gmp-devel
+BuildRequires:  mpfr-devel
+BuildRequires:  libmpc-devel
+BuildRequires:  zlib-devel
+BuildRequires:  python3
+BuildRequires:  python3-pyyaml
+BuildRequires:  %{tsname}-runtime = @RUNTIME_EVR@
+BuildRequires:  %{tsname}-binutils = @BINUTILS_EVR@
+
+Requires:       %{tsname}-runtime = @RUNTIME_EVR@
+Requires:       %{tsname}-binutils >= @BINUTILS_MIN_EVR@
+Requires:       glibc%{?_isa}
+Requires:       libgcc%{?_isa}
+
+Provides:       gcc-toolset(%{toolset_id})
+Provides:       gcc-toolset-gcc(major) = %{gcc_major}
+
+%description
+Parallel-installable GCC compiler for %{tsname}.
+It does not replace the system GCC.
+
+%package c++
+Summary:        C++ support for %{tsname}
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+Requires:       %{tsname}-libstdc++-devel%{?_isa} = %{version}-%{release}
+
+%description c++
+C++ compiler frontend and driver for %{tsname}.
+
+%package -n %{tsname}-libstdc++-devel
+Summary:        C++ headers and libraries for %{tsname}
+%if "%{runtime_strategy}" == "private-runtime"
+Requires:       %{tsname}-runtime-libs%{?_isa} = %{version}-%{release}
+%else
+Requires:       libstdc++%{?_isa}
+%endif
+
+%description -n %{tsname}-libstdc++-devel
+C++ standard library headers, linker scripts and static archives
+for %{tsname}.
+
+%if "%{runtime_strategy}" == "private-runtime"
+%package -n %{tsname}-runtime-libs
+Summary:        Private C++ and libgcc runtimes for %{tsname}
+Requires:       glibc%{?_isa}
+
+%description -n %{tsname}-runtime-libs
+Private libstdc++.so.6 and libgcc_s.so.1 installed under the Toolset
+prefix. Applications must use the Toolset environment, a wrapper or
+an explicit RUNPATH; this package never writes /etc/ld.so.conf*.
+%endif
+
+%prep
+%autosetup -N -n @SOURCE_DIR@
+export PYTHONPATH=%{gts_home}
+python3 %{gts_home}/scripts/apply-patches \
+    --manifest %{SOURCE2} \
+    --source-root "$PWD" \
+    --require-zero-fuzz
+
+%build
+mkdir -p obj-%{target_triple}
+cd obj-%{target_triple}
+
+export MAKEINFO=/bin/true
+PATH="%{tsprefix}/bin:${PATH}" \
+MAKEINFO=/bin/true \
+../configure \
+    --build=%{target_triple} \
+    --host=%{target_triple} \
+    --target=%{target_triple} \
+    --prefix=%{tsprefix} \
+    --exec-prefix=%{tsprefix} \
+    --libdir=%{tsprefix}/%{tslib} \
+    --libexecdir=%{tsprefix}/libexec \
+    --enable-languages=@LANGUAGES@ \
+    --enable-shared \
+    --enable-threads=posix \
+    @GCC_CONFIGURE_FLAGS@
+
+%make_build MAKEINFO=/bin/true @BOOTSTRAP_TARGET@
+
+%install
+rm -rf %{buildroot}
+%make_install -C obj-%{target_triple} MAKEINFO=/bin/true
+
+export PYTHONPATH=%{gts_home}
+python3 %{gts_home}/scripts/transform-stage \
+    --stage-root %{buildroot} \
+    --toolset-prefix %{tsprefix} \
+    --strategy %{runtime_strategy} \
+    --system-libdir /usr/%{tslib}
+
+mkdir -p %{_builddir}/manifests
+python3 %{gts_home}/scripts/discover-files \
+    --stage-root %{buildroot} \
+    --toolset-root %{tsroot} \
+    --toolset-prefix %{tsprefix} \
+    --strategy %{runtime_strategy} \
+    --component gcc \
+    --output %{_builddir}/manifests
+
+%check
+export PYTHONPATH=%{gts_home}
+python3 %{gts_home}/scripts/verify-stage \
+    --stage-root %{buildroot} \
+    --toolset-root %{tsroot} \
+    --glibc-baseline %{glibc_baseline} \
+    --policy default \
+    --report %{_builddir}/stage-verify.json
+
+%files -f %{_builddir}/manifests/gcc.files
+%files c++ -f %{_builddir}/manifests/gcc-c++.files
+%files -n %{tsname}-libstdc++-devel -f %{_builddir}/manifests/libstdc++-devel.files
+%if "%{runtime_strategy}" == "private-runtime"
+%files -n %{tsname}-runtime-libs -f %{_builddir}/manifests/runtime-libs.files
+%endif
+
+%changelog
+@CHANGELOG@

@@ -1,0 +1,76 @@
+# 本文件由 gts-agent 生成器渲染，属于本项目 Spec 骨架，
+# 不是 Red Hat 原始 Spec。%files 为精确清单，无宽泛通配符。
+
+%global toolset_id       @TOOLSET_ID@
+%global tsname           gcc-toolset-%{toolset_id}
+%global tsroot           /opt/rh/%{tsname}/root
+%global tsprefix         %{tsroot}/usr
+%global tslib            @LIB_NAME@
+%global runtime_strategy @RUNTIME_STRATEGY@
+
+Name:           %{tsname}-runtime
+Version:        @RUNTIME_VERSION@
+Release:        @RELEASE@%{?dist}
+Summary:        Runtime environment for %{tsname}
+License:        @LICENSE_EXPRESSION@
+URL:            @PROJECT_URL@
+
+Source0:        enable.in
+Source1:        env-wrapper.in
+
+BuildArch:      noarch
+
+%description
+Directory layout, activation script and environment wrapper for
+%{tsname}. Installing this package never modifies the system GCC,
+system binutils, global alternatives or /etc/ld.so.conf*.
+
+%prep
+
+%build
+
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}/opt/rh/%{tsname}
+mkdir -p %{buildroot}%{tsprefix}/bin
+mkdir -p %{buildroot}%{tsprefix}/%{tslib}
+mkdir -p %{buildroot}%{tsprefix}/include
+mkdir -p %{buildroot}%{tsprefix}/libexec
+mkdir -p %{buildroot}%{tsprefix}/share/man
+mkdir -p %{buildroot}%{tsprefix}/share/info
+mkdir -p %{buildroot}%{_bindir}
+mkdir -p %{buildroot}%{_prefix}/lib/gcc-toolset
+
+sed -e 's|__GTS_ID__|%{toolset_id}|g' \
+    -e 's|__GTS_STRATEGY__|%{runtime_strategy}|g' \
+    %{SOURCE0} > %{buildroot}/opt/rh/%{tsname}/enable
+sed -e 's|__GTS_ID__|%{toolset_id}|g' \
+    -e 's|__GTS_STRATEGY__|%{runtime_strategy}|g' \
+    %{SOURCE0} > %{buildroot}%{_prefix}/lib/gcc-toolset/%{toolset_id}-env.source
+sed -e 's|__GTS_ID__|%{toolset_id}|g' \
+    %{SOURCE1} > %{buildroot}%{_bindir}/%{tsname}-env
+chmod 0644 %{buildroot}/opt/rh/%{tsname}/enable
+chmod 0644 %{buildroot}%{_prefix}/lib/gcc-toolset/%{toolset_id}-env.source
+chmod 0755 %{buildroot}%{_bindir}/%{tsname}-env
+
+cat > %{_builddir}/runtime.files <<EOF
+%dir /opt/rh/%{tsname}
+%dir %{tsroot}
+%dir %{tsprefix}
+%dir %{tsprefix}/bin
+%dir %{tsprefix}/%{tslib}
+%dir %{tsprefix}/include
+%dir %{tsprefix}/libexec
+%dir %{tsprefix}/share
+%dir %{tsprefix}/share/man
+%dir %{tsprefix}/share/info
+%dir %{_prefix}/lib/gcc-toolset
+/opt/rh/%{tsname}/enable
+%{_bindir}/%{tsname}-env
+%{_prefix}/lib/gcc-toolset/%{toolset_id}-env.source
+EOF
+
+%files -f %{_builddir}/runtime.files
+
+%changelog
+@CHANGELOG@

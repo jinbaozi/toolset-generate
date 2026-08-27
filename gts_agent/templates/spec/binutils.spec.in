@@ -1,0 +1,102 @@
+# 本文件由 gts-agent 生成器渲染，属于本项目 Spec 骨架，
+# 不是 Red Hat 原始 Spec。所有 %files 必须使用 -f 精确清单。
+
+%global toolset_id       @TOOLSET_ID@
+%global tsname           gcc-toolset-%{toolset_id}
+%global target_triple    @TARGET_TRIPLE@
+%global tsroot           /opt/rh/%{tsname}/root
+%global tsprefix         %{tsroot}/usr
+%global tslib            @LIB_NAME@
+%global runtime_strategy @RUNTIME_STRATEGY@
+%global glibc_baseline   @GLIBC_BASELINE@
+%global gts_home %{?gts_agent_home:%{gts_agent_home}}%{!?gts_agent_home:%{_sourcedir}/gts-agent}
+
+Name:           %{tsname}-binutils
+Version:        @BINUTILS_VERSION@
+Release:        @RELEASE@%{?dist}
+Summary:        Parallel-installable binutils for %{tsname}
+License:        @LICENSE_EXPRESSION@
+URL:            @PROJECT_URL@
+
+Source0:        binutils-@BINUTILS_VERSION@.tar.xz
+Source1:        source.lock.json
+
+BuildRequires:  make
+BuildRequires:  gcc
+BuildRequires:  gcc-c++
+BuildRequires:  glibc-devel
+BuildRequires:  zlib-devel
+BuildRequires:  python3
+BuildRequires:  python3-pyyaml
+BuildRequires:  %{tsname}-runtime = @RUNTIME_EVR@
+
+Requires:       %{tsname}-runtime = @RUNTIME_EVR@
+
+Provides:       gcc-toolset-binutils(%{toolset_id}) = %{version}-%{release}
+
+%description
+Parallel-installable binutils for %{tsname}.
+It does not replace the system binutils.
+
+%prep
+%autosetup -n binutils-@BINUTILS_VERSION@
+
+%build
+mkdir -p obj-%{target_triple}
+cd obj-%{target_triple}
+
+# AlmaLinux 9 默认仓库没有 texinfo；不构建 info 手册。
+export MAKEINFO=/bin/true
+
+MAKEINFO=/bin/true \
+../configure \
+    --build=%{target_triple} \
+    --host=%{target_triple} \
+    --target=%{target_triple} \
+    --prefix=%{tsprefix} \
+    --libdir=%{tsprefix}/%{tslib} \
+    --with-sysroot=/ \
+    --enable-shared \
+    --enable-plugins \
+    --enable-new-dtags \
+    --disable-rpath \
+    --disable-gold \
+    --disable-gprofng \
+    --disable-werror \
+    --with-system-zlib \
+    @BINUTILS_CONFIGURE_FLAGS@
+
+%make_build MAKEINFO=/bin/true
+
+%install
+rm -rf %{buildroot}
+%make_install -C obj-%{target_triple} MAKEINFO=/bin/true
+
+# 最小工具集：Toolset 前缀内 ld -> ld.bfd，不使用全局 alternatives。
+if [ -e %{buildroot}%{tsprefix}/bin/ld.bfd ] && [ ! -e %{buildroot}%{tsprefix}/bin/ld ]; then
+    ln -s ld.bfd %{buildroot}%{tsprefix}/bin/ld
+fi
+
+export PYTHONPATH=%{gts_home}
+mkdir -p %{_builddir}/manifests
+python3 %{gts_home}/scripts/discover-files \
+    --stage-root %{buildroot} \
+    --toolset-root %{tsroot} \
+    --toolset-prefix %{tsprefix} \
+    --strategy %{runtime_strategy} \
+    --component binutils \
+    --output %{_builddir}/manifests
+
+%check
+export PYTHONPATH=%{gts_home}
+python3 %{gts_home}/scripts/verify-stage \
+    --stage-root %{buildroot} \
+    --toolset-root %{tsroot} \
+    --glibc-baseline %{glibc_baseline} \
+    --policy default \
+    --report %{_builddir}/stage-verify.json
+
+%files -f %{_builddir}/manifests/binutils.files
+
+%changelog
+@CHANGELOG@

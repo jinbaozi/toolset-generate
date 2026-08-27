@@ -1,0 +1,112 @@
+# 黄金参考组合 A：CentOS Stream 9 / GCC Toolset 14 / x86_64 / system-nonshared
+# 见方案 8.1。sha256 必须在锁定源码后填入真实值。
+schema_version: 1
+
+job:
+  name: cs9-gts14-reference
+  toolset_id: "14"
+  mode: qualified-build
+
+platform:
+  distro:
+    id: centos-stream
+    major: 9
+  architecture: x86_64
+  target_triple: x86_64-redhat-linux
+  rpm_adapter: rpm-4.16
+  glibc_baseline:
+    resolve_from_buildroot: true
+  multilib:
+    enabled: false
+
+toolchain:
+  base_gcc:
+    source: system
+    executable: /usr/bin/gcc
+    expected_major: 11
+
+  target_gcc:
+    version: 14.2.1
+    languages: [c, cxx]
+    bootstrap: bootstrap
+    source_ref: gcc-14-redhat-profile
+
+  binutils:
+    version: "2.41"
+    source_ref: binutils-gts14-profile
+    rebuild_with_target_gcc: true
+
+toolset:
+  name: gcc-toolset-14
+  root: /opt/rh/gcc-toolset-14/root
+  prefix: /opt/rh/gcc-toolset-14/root/usr
+  runtime_strategy: system-nonshared
+  activation:
+    shell_wrapper: true
+    modulefile: false
+  embed_application_runpath: false
+  modify_global_alternatives: false
+  modify_ld_so_conf: false
+
+sources:
+  gcc:
+    type: srpm
+    uri: "<approved-source-location>/gcc-toolset-14-gcc-14.2.1.src.rpm"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  binutils:
+    type: srpm
+    uri: "<approved-source-location>/gcc-toolset-14-binutils-2.41.src.rpm"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  reference_profile:
+    distro: centos-stream-9
+    toolset: gcc-toolset-14
+    commit: "11662494"
+  allow_network: false
+  source_date_epoch: 1736467200
+
+repositories:
+  snapshot_id: cs9-2026-08-26
+  offline_cache: cache/rpm
+  gpg_check: true
+
+build:
+  executor: mock
+  mock_config: configs/mock/cs9-x86_64.cfg
+  max_parallel_jobs: 16
+  memory_limit_gib: 32
+  disk_limit_gib: 120
+  timeout_seconds: 21600
+  locale: C.UTF-8
+  timezone: UTC
+  umask: "0022"
+
+packaging:
+  layout: recommended-closure
+  generate_debuginfo: true
+  generate_debugsource: true
+  static_subpackage: false
+  strict_file_manifest: true
+  terminate_on_unowned_files: true
+
+validation:
+  profile: production
+  cxx_standards: [cxx17, cxx20]
+  test_static_libgcc: true
+  test_static_libstdcxx: true
+  test_full_static: false
+  dual_abi: true
+  reproducibility_builds: 2
+
+signing:
+  enabled: false
+  profile: staging
+
+policy:
+  max_transient_retries: 3
+  max_auto_repairs: 2
+  require_patch_approval: true
+  require_private_runtime_approval: true
+  require_publish_approval: true
+  fail_on_patch_fuzz: true
+  fail_on_system_path_write: true
+  fail_on_glibc_baseline_exceed: true
