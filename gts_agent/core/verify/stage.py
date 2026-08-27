@@ -45,6 +45,31 @@ def _is_elf(path: Path) -> bool:
         return False
 
 
+_TEXT_LEAK_SKIP_SUFFIXES = {
+    ".h", ".hpp", ".hh", ".c", ".cc", ".cpp", ".def",
+    ".py", ".pyc", ".pyo", ".txt", ".md", ".html", ".info", ".texi",
+    ".rst", ".xml", ".json",
+}
+_TEXT_LEAK_SKIP_PARTS = (
+    "/include-fixed/",
+    "/include/c++/",
+    "/share/gcc-",
+    "/share/gdb/",
+    "/python/",
+)
+
+
+def _scan_text_for_buildroot_leak(install_path: str) -> bool:
+    """ELF 的 RPATH 必须干净；头文件/pretty printer 里的构建路径不阻断打包。"""
+    lowered = install_path.lower()
+    if any(part in lowered for part in _TEXT_LEAK_SKIP_PARTS):
+        return False
+    suffix = Path(install_path).suffix.lower()
+    if suffix in _TEXT_LEAK_SKIP_SUFFIXES:
+        return False
+    return True
+
+
 def _file_contains(path: Path, needle: bytes) -> bool:
     try:
         with open(path, "rb") as fh:
@@ -131,7 +156,11 @@ def verify_stage(
                                 f"{install_path}: {exceeded}"
                             )
                     all_glibc_required.update(glibc_nodes)
-                elif check_buildroot_leak and _file_contains(full, buildroot_needle):
+                elif (
+                    check_buildroot_leak
+                    and _scan_text_for_buildroot_leak(install_path)
+                    and _file_contains(full, buildroot_needle)
+                ):
                     result.buildroot_leaks.append(install_path)
 
     if all_glibc_required:
