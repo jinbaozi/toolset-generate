@@ -48,6 +48,7 @@ cd obj-%{target_triple}
 # AlmaLinux 9 默认仓库没有 texinfo；不构建 info 手册。
 export MAKEINFO=/bin/true
 
+MAKEINFO=/bin/true \
 ../configure \
     --build=%{target_triple} \
     --host=%{target_triple} \
@@ -65,7 +66,7 @@ export MAKEINFO=/bin/true
     --with-system-zlib \
     @BINUTILS_CONFIGURE_FLAGS@
 
-%make_build
+%make_build MAKEINFO=/bin/true
 
 %install
 rm -rf %{buildroot}

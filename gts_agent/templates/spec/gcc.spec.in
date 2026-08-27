@@ -94,6 +94,7 @@ cd obj-%{target_triple}
 
 export MAKEINFO=/bin/true
 PATH="%{tsprefix}/bin:${PATH}" \
+MAKEINFO=/bin/true \
 ../configure \
     --build=%{target_triple} \
     --host=%{target_triple} \
@@ -107,7 +108,7 @@ PATH="%{tsprefix}/bin:${PATH}" \
     --enable-threads=posix \
     @GCC_CONFIGURE_FLAGS@
 
-%make_build @BOOTSTRAP_TARGET@
+%make_build MAKEINFO=/bin/true @BOOTSTRAP_TARGET@
 
 %install
 rm -rf %{buildroot}
