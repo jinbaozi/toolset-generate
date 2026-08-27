@@ -51,7 +51,8 @@ def compare_snapshots(before: Dict[str, str], after: Dict[str, str]) -> List[str
     return [path for path, digest in before.items() if after.get(path) != digest]
 
 
-def save_snapshot(snapshot: Dict[str, str], path: Path) -> None:
+def save_snapshot(snapshot: Dict[str, str], path: Path | str) -> None:
     import json
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from gts_agent.core.verify.isolation import compare_snapshots, take_snapshot
+from gts_agent.core.verify.isolation import compare_snapshots, save_snapshot, take_snapshot
 
 
 def test_snapshot_includes_ld_so_conf_d(tmp_path, monkeypatch):
@@ -21,3 +21,10 @@ def test_snapshot_includes_ld_so_conf_d(tmp_path, monkeypatch):
     extra.write_text("changed\n", encoding="utf-8")
     after = take_snapshot()
     assert compare_snapshots(before, after) == [str(extra)]
+
+
+def test_save_snapshot_accepts_string_path(tmp_path):
+    target = tmp_path / "reports" / "snapshot-before.json"
+    save_snapshot({"/usr/bin/gcc": "abc"}, str(target))
+    assert target.exists()
+    assert "abc" in target.read_text(encoding="utf-8")
