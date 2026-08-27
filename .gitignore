@@ -7,3 +7,5 @@ cache/
 artifacts/
 build/
 dist/
+.venv/
+venv/
