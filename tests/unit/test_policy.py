@@ -30,6 +30,27 @@ def test_toolset_path_allowed():
     assert decision.result == "ALLOW"
 
 
+def test_env_wrapper_dir_allowed_without_trailing_slash():
+    """runtime 包拥有 %dir /usr/lib/gcc-toolset，前缀配置带尾斜杠时也必须允许该目录。"""
+    policy = load_policy("default")
+    assert check_install_path(policy, "/usr/lib/gcc-toolset").result == "ALLOW"
+    assert check_install_path(
+        policy, "/usr/lib/gcc-toolset/14-env.source"
+    ).result == "ALLOW"
+    assert check_install_path(
+        policy, "/usr/bin/gcc-toolset-14-env"
+    ).result == "ALLOW"
+
+
+def test_elf_build_id_index_allowed():
+    """rpm 写入的 /usr/lib/.build-id 不覆盖系统编译器。"""
+    policy = load_policy("default")
+    assert check_install_path(policy, "/usr/lib/.build-id").result == "ALLOW"
+    assert check_install_path(
+        policy, "/usr/lib/.build-id/0d/70a6e847d69e62db63029e46cedbbba8abedd6"
+    ).result == "ALLOW"
+
+
 def test_system_gcc_denied():
     policy = load_policy("default")
     decision = check_install_path(policy, "/usr/bin/gcc")

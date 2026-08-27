@@ -74,13 +74,20 @@ def check_install_path(policy: Policy, install_path: str) -> PolicyDecision:
                 detail=f"{install_path} 命中禁止路径 {forbidden}（覆盖系统工具）",
             )
     for prefix in policy.allowed_install_prefixes:
-        if install_path.startswith(prefix):
+        if _matches_allowed_prefix(install_path, prefix):
             return PolicyDecision(rule="allowed_install_prefixes", result="ALLOW")
     return PolicyDecision(
         rule="allowed_install_prefixes",
         result="DENY",
         detail=f"{install_path} 不在任何允许的安装前缀内",
     )
+
+
+def _matches_allowed_prefix(install_path: str, prefix: str) -> bool:
+    if install_path.startswith(prefix):
+        return True
+    stripped = prefix.rstrip("/")
+    return bool(stripped) and install_path == stripped
 
 
 def check_manifest_paths(policy: Policy, install_paths: List[str]) -> List[PolicyDecision]:

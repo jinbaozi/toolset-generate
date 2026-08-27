@@ -29,6 +29,7 @@ allowed_install_prefixes:
   - /usr/bin/gcc-toolset-        # 仅 env wrapper：gcc-toolset-N-env
   - /usr/lib/gcc-toolset/        # 仅 env source 文件
   - /usr/lib/rpm/macros.d/macros.gts-  # 仅 Toolset 私有宏
+  - /usr/lib/.build-id           # rpm 自动生成的 ELF build-id 索引
 
 # 绝不允许出现在 %files 的路径（覆盖系统工具即阻断）。
 forbidden_install_paths:
