@@ -14,6 +14,10 @@ SNAPSHOT_PATHS = [
     "/etc/ld.so.conf",
 ]
 
+SNAPSHOT_DIRS = [
+    "/etc/ld.so.conf.d",
+]
+
 
 def _sha256(path: Path) -> str:
     if not path.exists() or path.is_dir():
@@ -32,6 +36,14 @@ def take_snapshot(extra_paths: List[str] = None) -> Dict[str, str]:
     snapshot = {}
     for raw in SNAPSHOT_PATHS + list(extra_paths or []):
         snapshot[raw] = _sha256(Path(raw))
+    for directory in SNAPSHOT_DIRS:
+        root = Path(directory)
+        if not root.is_dir():
+            snapshot[directory] = ""
+            continue
+        for child in sorted(root.iterdir()):
+            if child.is_file() or child.is_symlink():
+                snapshot[str(child)] = _sha256(child)
     return snapshot
 
 

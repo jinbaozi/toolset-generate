@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from gts_agent.core.abi.elf import parse_elf_header, parse_version_info
 from gts_agent.core.compatibility.glibc import check_glibc_baseline
@@ -31,11 +31,14 @@ def analyze_binary(
     glibc_baseline: str,
     runtime_strategy: str,
     toolset_libdir: str,
+    provided_glibc_nodes: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     elf = parse_elf_header(path)
     _defs, reqs = parse_version_info(path)
     glibc_nodes = [node for node in reqs if node.startswith("GLIBC_")]
-    glibc_report = check_glibc_baseline(glibc_nodes, glibc_baseline)
+    glibc_report = check_glibc_baseline(
+        glibc_nodes, glibc_baseline, provided_nodes=provided_glibc_nodes
+    )
     leaks = [
         item for item in (elf.rpath + elf.runpath)
         if "BUILD" in item or "/tmp/" in item or "rpmbuild" in item

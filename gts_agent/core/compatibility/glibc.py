@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, Set, Tuple
+from typing import Iterable, Optional, Set, Tuple
 
 from gts_agent.core.models.compatibility import CompatibilityReport, Finding, Verdict
 
@@ -31,15 +31,25 @@ def expand_baseline(baseline: str) -> str:
 def check_glibc_baseline(
     required_nodes: Iterable[str],
     baseline_version: str,
+    provided_nodes: Optional[Iterable[str]] = None,
 ) -> CompatibilityReport:
     """required_nodes 为所有目标 ELF 的 GLIBC_* 版本需求并集。
 
-    baseline_version 为运行基线 glibc 版本（如 "2.34"），
-    基线提供 <= 该版本的所有 GLIBC_* 节点。
+    baseline_version 为运行基线 glibc 版本（如 "2.34"）。
+    若提供 provided_nodes（构建根 libc.so.6 的版本定义），则按
+    required - provided 判定——RHEL 9 的 glibc-2.34 会回移植
+    GLIBC_2.35 等节点，不能只用版本号比较。
+    未提供 provided_nodes 时，退回为「需求节点 <= 基线版本号」。
     """
     report = CompatibilityReport()
     baseline_node = expand_baseline(baseline_version)
     baseline_tuple = parse_glibc_version_node(baseline_node)
+    provided: Optional[Set[str]] = None
+    if provided_nodes is not None:
+        provided = {
+            node for node in provided_nodes
+            if node.startswith("GLIBC_") and node != "GLIBC_PRIVATE"
+        }
 
     exceeded: Set[str] = set()
     for node in required_nodes:
@@ -47,6 +57,10 @@ def check_glibc_baseline(
             continue
         if node == "GLIBC_PRIVATE":
             exceeded.add(node)
+            continue
+        if provided is not None:
+            if node not in provided:
+                exceeded.add(node)
             continue
         try:
             if parse_glibc_version_node(node) > baseline_tuple:

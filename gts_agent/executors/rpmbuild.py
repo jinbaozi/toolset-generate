@@ -20,6 +20,27 @@ COMPONENT_TIMEOUTS = {
 }
 
 
+def gcc_objects_reusable(job_dir: Path) -> bool:
+    """GCC bootstrap 已完成（stage3 + cc1）时，打包失败可跳过 %prep/%build。"""
+    build = job_dir / "rpmbuild" / "BUILD"
+    if not build.exists():
+        return False
+    for gcc_src in build.glob("gcc-*"):
+        if not gcc_src.is_dir():
+            continue
+        for objdir in gcc_src.glob("obj-*"):
+            cc1 = objdir / "gcc" / "cc1"
+            stage = objdir / "stage_current"
+            if not cc1.is_file():
+                continue
+            if not stage.is_file():
+                continue
+            current = stage.read_text(encoding="utf-8").strip()
+            if current in {"stage3", "compare"}:
+                return True
+    return False
+
+
 def prepare_rpmbuild_tree(
     job_dir: Path,
     sources: Dict[str, Path],
@@ -77,12 +98,17 @@ def rpmbuild_in_container(
         "--define 'gts_agent_home /src'",
     ]
     # 最小工具集验证不需要 GCC debuginfo；find-debuginfo 会显著拉长打包。
-    if spec_path.name.endswith("-gcc.spec"):
+    gcc_spec = spec_path.name.endswith("-gcc.spec")
+    if gcc_spec:
         defines.append("--define 'debug_package %{nil}'")
     define_lines = " \\\n  ".join(defines)
+    if gcc_spec and gcc_objects_reusable(job_dir):
+        rpmbuild_mode = "--short-circuit -bb"
+    else:
+        rpmbuild_mode = "-ba"
 
     script = f"""set -euo pipefail
-{install_cmds}rpmbuild -ba \\
+{install_cmds}rpmbuild {rpmbuild_mode} \\
   {define_lines} \\
   /job/specs/{spec_path.name}
 """

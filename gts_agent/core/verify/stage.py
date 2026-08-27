@@ -28,6 +28,7 @@ class StageVerifyResult:
     policy_violations: List[str] = field(default_factory=list)
     scanned_elf_count: int = 0
     max_glibc_required: str = ""
+    provided_glibc_nodes: List[str] = field(default_factory=list)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,14 +84,40 @@ def _file_contains(path: Path, needle: bytes) -> bool:
     return False
 
 
+def load_system_glibc_provided() -> Optional[Set[str]]:
+    """读取构建根/宿主 libc.so.6 实际提供的 GLIBC_* 版本节点。"""
+    for candidate in (
+        Path("/lib64/libc.so.6"),
+        Path("/usr/lib64/libc.so.6"),
+        Path("/lib/x86_64-linux-gnu/libc.so.6"),
+        Path("/lib/aarch64-linux-gnu/libc.so.6"),
+    ):
+        if not candidate.exists():
+            continue
+        try:
+            definitions, _requirements = parse_version_info(candidate)
+        except RuntimeError:
+            continue
+        nodes = {node for node in definitions if node.startswith("GLIBC_")}
+        if nodes:
+            return nodes
+    return None
+
+
 def verify_stage(
     stage_root: Path,
     toolset_root: str,
     glibc_baseline: str,
     policy: Optional[Policy] = None,
     check_buildroot_leak: bool = True,
+    provided_glibc_nodes: Optional[Set[str]] = None,
 ) -> StageVerifyResult:
     result = StageVerifyResult()
+    provided = provided_glibc_nodes
+    if provided is None:
+        provided = load_system_glibc_provided()
+    if provided:
+        result.provided_glibc_nodes = sorted(provided)
     stage_root = stage_root.resolve()
     buildroot_needle = str(stage_root).encode()
     scan_roots = []
@@ -149,7 +176,11 @@ def verify_stage(
                         node for node in requirements if node.startswith("GLIBC_")
                     }
                     if glibc_nodes:
-                        report = check_glibc_baseline(glibc_nodes, glibc_baseline)
+                        report = check_glibc_baseline(
+                            glibc_nodes,
+                            glibc_baseline,
+                            provided_nodes=provided,
+                        )
                         if report.verdict == Verdict.FAIL:
                             exceeded = report.findings[0].facts.get("required", [])
                             result.glibc_violations.append(

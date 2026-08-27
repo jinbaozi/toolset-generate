@@ -14,3 +14,9 @@ def test_compile_link_test_reinstalls_rpms_in_fresh_container():
     source = inspect.getsource(Pipeline.install_and_test)
     assert source.count("INSTALL_BINARY_RPMS") >= 2
     assert "source /opt/rh/gcc-toolset-" in source
+
+
+def test_abi_uses_stage_provided_glibc_nodes():
+    source = inspect.getsource(Pipeline.install_and_test)
+    assert "provided_glibc_nodes" in source
+    assert "stage-verify.json" in source

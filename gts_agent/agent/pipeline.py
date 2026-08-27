@@ -347,6 +347,15 @@ PY
         )
 
         def abi_runner(_input: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            provided = None
+            for report_path in (job_dir / "rpmbuild" / "BUILD").rglob("stage-verify.json"):
+                try:
+                    payload = json.loads(report_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                nodes = payload.get("provided_glibc_nodes") or []
+                if nodes:
+                    provided = nodes
             reports = []
             out_dir = job_dir / "tests" / "gcc-out"
             for binary in sorted(out_dir.glob("*")):
@@ -354,7 +363,8 @@ PY
                     continue
                 try:
                     reports.append(analyze_binary(
-                        binary, glibc, strategy, f"{prefix}/lib64"
+                        binary, glibc, strategy, f"{prefix}/lib64",
+                        provided_glibc_nodes=provided,
                     ))
                 except Exception as exc:  # noqa: BLE001
                     reports.append({
