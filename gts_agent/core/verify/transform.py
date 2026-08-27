@@ -68,6 +68,10 @@ def transform_stage(
 ) -> List[str]:
     """按策略转换 staging 树，返回执行过的动作描述。"""
     actions: List[str] = []
+    for la_path in stage_root.rglob("*.la"):
+        if la_path.is_file() and not la_path.is_symlink():
+            la_path.unlink()
+            actions.append(f"removed libtool archive {la_path}")
     if runtime_strategy == "private-runtime":
         actions.append("private-runtime: 保留目标 libstdc++/libgcc_s DSO")
         return actions

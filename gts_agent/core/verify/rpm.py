@@ -9,6 +9,23 @@ from typing import Dict, List
 from gts_agent.agent.policy_engine import Policy, check_install_path, check_provides
 
 
+def is_debug_or_source_rpm(rpm: Path) -> bool:
+    """debuginfo/debugsource/SRPM 不参与 Toolset 路径策略检查。"""
+    name = rpm.name
+    return (
+        name.endswith(".src.rpm")
+        or "-debuginfo-" in name
+        or "-debugsource-" in name
+    )
+
+
+def inspectable_rpms(rpms_dir: Path) -> List[Path]:
+    return [
+        path for path in sorted(rpms_dir.rglob("*.rpm"))
+        if not is_debug_or_source_rpm(path)
+    ]
+
+
 def _rpm_query(rpm: Path, query: str) -> str:
     result = subprocess.run(
         ["rpm", "-qp", "--qf", query, str(rpm)],
@@ -60,8 +77,7 @@ def inspect_rpm(rpm: Path, policy: Policy) -> Dict[str, object]:
 def inspect_rpm_dir(rpms_dir: Path, policy: Policy) -> Dict[str, object]:
     reports = [
         inspect_rpm(path, policy)
-        for path in sorted(rpms_dir.rglob("*.rpm"))
-        if not path.name.endswith(".src.rpm")
+        for path in inspectable_rpms(rpms_dir)
     ]
     return {
         "passed": all(item["passed"] for item in reports) if reports else False,

@@ -147,6 +147,7 @@ class JobStateMachine:
             attempt=attempt,
             started_at=_now(),
         )
+        self._save(state, record)
         try:
             output_data, extra = runner(input_data)
             record.output_digest = digest_of(output_data)

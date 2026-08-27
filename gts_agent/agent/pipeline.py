@@ -26,6 +26,7 @@ from gts_agent.executors.rpmbuild import (
     prepare_rpmbuild_tree,
     rpmbuild_in_container,
 )
+from gts_agent.core.verify.rpm import is_debug_or_source_rpm
 
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 _TEMPLATE_ROOT = _PKG_ROOT / "templates"
@@ -131,7 +132,7 @@ class Pipeline:
                 copied = collect_rpms(job_dir / "rpmbuild", rpm_dest)
                 extra_rpms = [
                     path for path in copied
-                    if not path.name.endswith(".src.rpm")
+                    if not is_debug_or_source_rpm(path)
                 ]
                 built.append(component)
             return {"components": built, "rpms": [p.name for p in extra_rpms]}, {
@@ -232,7 +233,7 @@ from gts_agent.core.verify.isolation import take_snapshot, save_snapshot
 save_snapshot(take_snapshot(), "/job/reports/snapshot-before.json")
 print("snapshot-before")
 PY
-rpm -Uvh /job/rpms/*.rpm
+rpm -Uvh $(ls /job/rpms/*.rpm | grep -vE 'debuginfo|debugsource|\\.src\\.rpm')
 python3 - <<'PY'
 import json, sys
 sys.path.insert(0, "/src")

@@ -41,6 +41,22 @@ def test_cannot_skip_states(tmp_path):
         machine.run_state(State.BUILD, {}, _ok_runner)
 
 
+def test_running_record_persisted_before_runner(tmp_path):
+    machine = JobStateMachine(tmp_path)
+    seen = {}
+
+    def runner(input_data):
+        latest = machine.load_latest(State.DISCOVER)
+        seen["status"] = latest.status
+        seen["attempt"] = latest.attempt
+        return {"result": "ok"}, {}
+
+    record = machine.run_state(State.DISCOVER, {"a": 1}, runner)
+    assert seen["status"] == StateStatus.RUNNING
+    assert seen["attempt"] == 1
+    assert record.status == StateStatus.SUCCEEDED
+
+
 def test_failed_state_recorded_and_retryable(tmp_path):
     machine = JobStateMachine(tmp_path)
 

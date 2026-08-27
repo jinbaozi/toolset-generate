@@ -96,6 +96,14 @@ _RUNTIME_DSO_PREFIXES = (
     "libstdc++.so.", "libgcc_s.so.", "libatomic.so.", "libgomp.so.",
     "libquadmath.so.", "libitm.so.", "libssp.so.",
 )
+# 未带 SONAME 版本的链接名（libstdc++.so 仍归 devel）
+_UNVERSIONED_RUNTIME_LINKER_NAMES = {
+    "libgcc_s.so", "libatomic.so", "libgomp.so", "libquadmath.so",
+    "libitm.so", "libssp.so",
+}
+
+GCC_FILE_PACKAGES = ("gcc", "gcc-c++", "libstdc++-devel")
+GCC_PRIVATE_RUNTIME_PACKAGES = GCC_FILE_PACKAGES + ("runtime-libs",)
 
 
 def _strip_triple_prefix(name: str) -> str:
@@ -130,20 +138,6 @@ def classify_path(
 
     top = relative.split("/", 1)[0] if "/" in relative else relative
 
-    if relative.startswith("bin/"):
-        if base_name in _BINUTILS_TOOLS or name in _BINUTILS_TOOLS:
-            return "binutils"
-        if name in _CXX_DRIVERS or base_name in _CXX_DRIVERS or \
-                name.endswith(("-g++", "-c++")):
-            return "gcc-c++"
-        return "gcc"
-    # binutils tooldir：<prefix>/<triple>/bin、<prefix>/<triple>/lib/ldscripts
-    if "linux" in top and top not in ("lib", "lib64", "libexec"):
-        return "binutils"
-    if relative.startswith("libexec/gcc/"):
-        if name in ("cc1plus",):
-            return "gcc-c++"
-        return "gcc"
     if relative.startswith("include/c++/"):
         return "libstdc++-devel"
     if "libstdc++_nonshared" in name:
@@ -163,17 +157,34 @@ def classify_path(
                 "E-MANIFEST",
                 f"system-nonshared 模式不应打包私有 libstdc++ DSO: {install_path}",
             )
-    if any(name.startswith(prefix) for prefix in _RUNTIME_DSO_PREFIXES):
+    if any(name.startswith(prefix) for prefix in _RUNTIME_DSO_PREFIXES) or \
+            name in _UNVERSIONED_RUNTIME_LINKER_NAMES:
         if runtime_strategy == "private-runtime":
             return "runtime-libs"
         raise ManifestError(
             "E-MANIFEST",
             f"system-nonshared 模式不应打包私有运行时 DSO: {install_path}",
         )
+    if relative.startswith("bin/"):
+        if base_name in _BINUTILS_TOOLS or name in _BINUTILS_TOOLS:
+            return "binutils"
+        if name in _CXX_DRIVERS or base_name in _CXX_DRIVERS or \
+                name.endswith(("-g++", "-c++")):
+            return "gcc-c++"
+        return "gcc"
+    # binutils tooldir 副本：<prefix>/<triple>/bin、<prefix>/<triple>/lib/ldscripts
+    if _is_tooldir_binutils(relative, top):
+        return "binutils"
+    if relative.startswith("libexec/gcc/"):
+        if name in ("cc1plus",):
+            return "gcc-c++"
+        return "gcc"
     # libstdc++ pretty printers / python 模块
     if relative.startswith("share/gcc-") or "/python/" in relative:
         return "libstdc++-devel"
     if relative.startswith(("lib/gcc/", "lib64/", "lib/", "libexec/")):
+        return "gcc"
+    if "linux" in top and "/lib/" in f"/{relative}/":
         return "gcc"
     if relative.startswith("share/man/man1/"):
         stem = name.split(".")[0]
@@ -185,6 +196,16 @@ def classify_path(
     if relative.startswith(("include/", "share/")):
         return "gcc"
     return "gcc"
+
+
+def _is_tooldir_binutils(relative: str, top: str) -> bool:
+    """$prefix/$triple/{bin,lib/ldscripts} 是 binutils 已打包内容。"""
+    if top in ("lib", "lib64", "libexec", "bin", "include", "share") or "linux" not in top:
+        return False
+    parts = relative.split("/")
+    if len(parts) >= 2 and parts[1] == "bin":
+        return True
+    return "ldscripts" in parts
 
 
 def discover_staged_files(
@@ -249,8 +270,58 @@ def discover_staged_files(
             manifest.entries.append(entry)
 
     _scan_extra_runtime_paths(manifest, stage_root, toolset_prefix, runtime_strategy, component)
+    if component == "gcc":
+        _prune_binutils_owned(manifest, stage_root, staged_toolset)
+        _require_private_runtime_dsos(manifest, runtime_strategy)
     _assign_directories(manifest, stage_root, staged_toolset, component)
     return manifest
+
+
+def _prune_binutils_owned(
+    manifest: FileManifest,
+    stage_root: Path,
+    staged_toolset: Path,
+) -> None:
+    """GCC 构建根里的 binutils 工具已由 binutils RPM 拥有，删除以免未打包/冲突。"""
+    kept: List[ManifestEntry] = []
+    for entry in manifest.entries:
+        if entry.package != "binutils":
+            kept.append(entry)
+            continue
+        full = stage_root / entry.path.lstrip("/")
+        if full.is_symlink() or full.is_file():
+            full.unlink(missing_ok=True)
+    manifest.entries = kept
+    _remove_empty_directories(staged_toolset)
+
+
+def _remove_empty_directories(root: Path) -> None:
+    if not root.exists():
+        return
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+        directory = Path(dirpath)
+        if directory == root:
+            continue
+        try:
+            next(directory.iterdir())
+        except StopIteration:
+            directory.rmdir()
+        except OSError:
+            continue
+
+
+def _require_private_runtime_dsos(manifest: FileManifest, runtime_strategy: str) -> None:
+    if runtime_strategy != "private-runtime":
+        return
+    dsos = [
+        entry for entry in manifest.entries
+        if entry.package == "runtime-libs" and entry.file_type != "directory"
+    ]
+    if not dsos:
+        raise ManifestError(
+            "E-MANIFEST",
+            "private-runtime 未发现 libstdc++/libgcc_s 等运行时 DSO",
+        )
 
 
 def _scan_extra_runtime_paths(
@@ -332,16 +403,26 @@ def _assign_directories(
         ))
 
 
-def write_files_lists(manifest: FileManifest, output_dir: Path) -> Dict[str, Path]:
+def write_files_lists(
+    manifest: FileManifest,
+    output_dir: Path,
+    required_packages: Optional[List[str]] = None,
+) -> Dict[str, Path]:
     """为每个子包生成精确 %files 清单（每行一个绝对路径，无通配符）。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs: Dict[str, Path] = {}
-    for package, entries in sorted(manifest.by_package().items()):
+    grouped = manifest.by_package()
+    packages = set(grouped)
+    if required_packages:
+        packages.update(required_packages)
+    for package in sorted(packages):
         if package == "UNASSIGNED":
+            entries = grouped.get(package, [])
             raise ManifestError(
                 "E-MANIFEST",
                 f"存在未归属文件: {[e.path for e in entries][:10]}",
             )
+        entries = grouped.get(package, [])
         target = output_dir / f"{package}.files"
         lines = []
         for entry in sorted(entries, key=lambda e: (e.file_type != "directory", e.path)):
@@ -349,6 +430,9 @@ def write_files_lists(manifest: FileManifest, output_dir: Path) -> Dict[str, Pat
                 lines.append(f"%dir {entry.path}")
             else:
                 lines.append(entry.path)
-        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        text = "\n".join(lines)
+        if text:
+            text += "\n"
+        target.write_text(text, encoding="utf-8")
         outputs[package] = target
     return outputs

@@ -6,11 +6,15 @@ def test_private_runtime_keeps_dsos(tmp_path):
     lib.mkdir(parents=True)
     dso = lib / "libstdc++.so.6.0.33"
     dso.write_bytes(b"\x7fELF")
+    la = lib / "libstdc++.la"
+    la.write_text("libdir='/job/rpmbuild/BUILDROOT/opt/rh/gcc-toolset-14/root/usr/lib64'\n")
     actions = transform_stage(
         tmp_path, "/opt/rh/gcc-toolset-14/root/usr", "private-runtime"
     )
     assert dso.exists()
+    assert not la.exists()
     assert any("保留" in item for item in actions)
+    assert any(".la" in item for item in actions)
 
 
 def test_system_nonshared_replaces_dsos_with_scripts(tmp_path):

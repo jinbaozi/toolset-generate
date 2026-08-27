@@ -14,6 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gts_agent.core.manifest.discover import (  # noqa: E402
+    GCC_FILE_PACKAGES,
+    GCC_PRIVATE_RUNTIME_PACKAGES,
     ManifestError,
     discover_staged_files,
     write_files_lists,
@@ -42,7 +44,16 @@ def main() -> int:
         )
         output_dir = Path(args.output)
         manifest.save(output_dir / "manifest.yaml")
-        outputs = write_files_lists(manifest, output_dir)
+        required = {
+            "runtime": ["runtime"],
+            "binutils": ["binutils"],
+            "gcc": list(
+                GCC_PRIVATE_RUNTIME_PACKAGES
+                if args.strategy == "private-runtime"
+                else GCC_FILE_PACKAGES
+            ),
+        }[args.component]
+        outputs = write_files_lists(manifest, output_dir, required_packages=required)
     except ManifestError as exc:
         print(f"manifest 生成失败: {exc}", file=sys.stderr)
         return 1
