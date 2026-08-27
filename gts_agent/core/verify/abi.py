@@ -10,6 +10,22 @@ from gts_agent.core.compatibility.glibc import check_glibc_baseline
 from gts_agent.core.models.compatibility import Verdict
 
 
+_CXX_DYNAMIC_CASES = {
+    "hello-cpp", "exceptions", "rtti", "threads", "filesystem",
+    "dual-abi-1", "dual-abi-0",
+}
+
+
+def private_runtime_link_issues(binary_name: str, needed: List[str]) -> List[str]:
+    """private-runtime 下检查验证矩阵二进制的 libstdc++ 链接方式。"""
+    issues: List[str] = []
+    if binary_name in _CXX_DYNAMIC_CASES and "libstdc++.so.6" not in needed:
+        issues.append(f"{binary_name} 未链接 libstdc++.so.6")
+    if binary_name == "static-libstdcxx" and "libstdc++.so.6" in needed:
+        issues.append("static-libstdc++ 仍依赖 libstdc++.so.6")
+    return issues
+
+
 def analyze_binary(
     path: Path,
     glibc_baseline: str,
@@ -30,9 +46,7 @@ def analyze_binary(
     if leaks:
         issues.append(f"RPATH/RUNPATH 泄漏: {leaks}")
     if runtime_strategy == "private-runtime":
-        # 动态二进制应依赖 libstdc++.so.6；实际加载路径由 LD_LIBRARY_PATH 控制
-        if "libstdc++.so.6" not in elf.needed and path.suffix != ".c":
-            pass
+        issues.extend(private_runtime_link_issues(path.name, elf.needed))
     return {
         "path": str(path),
         "needed": elf.needed,
