@@ -53,15 +53,16 @@ def _gcc_tokens():
         "RUNTIME_VERSION": "14.2.1",
         "LIB_NAME": "lib64",
         "GLIBC_BASELINE": "2.34",
-        "CHANGELOG": "* initial",
+        "CHANGELOG": "* Thu Aug 27 2026 GCC Toolset Agent <gts-agent@example.internal> - 1\n- initial",
     }
 
 
 def test_render_gcc_template():
     rendered = render_template_file(TEMPLATE_DIR / "gcc.spec.in", _gcc_tokens())
     assert "Name:           %{tsname}-gcc" in rendered
-    assert "@" not in rendered.replace("%{?_isa}", "")  # 无残留占位符（粗检）
     assert "%files -f %{_builddir}/manifests/gcc.files" in rendered
+    leftover = [token for token in rendered.split() if token.startswith("@") and token.endswith("@")]
+    assert leftover == []
     assert "Provides:       gcc-toolset(%{toolset_id})" in rendered
     # 不提供裸 gcc capability
     assert "\nProvides:       gcc\n" not in rendered

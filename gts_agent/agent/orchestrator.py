@@ -311,15 +311,17 @@ class Orchestrator:
                 "BINUTILS_CONFIGURE_FLAGS": "",
                 "BOOTSTRAP_TARGET": bootstrap_target,
                 "VALIDATION_PROFILE": "production",
-                "RUNTIME_EVR": f"{self.config.target_gcc.version}-1",
-                "BINUTILS_EVR": f"{self.config.binutils.version}-1",
-                "BINUTILS_MIN_EVR": self.config.binutils.version,
+                "RUNTIME_EVR": f"{self.config.target_gcc.version}-1%{{?dist}}",
+                "BINUTILS_EVR": f"{self.config.binutils.version}-1%{{?dist}}",
+                "BINUTILS_MIN_EVR": f"{self.config.binutils.version}-1%{{?dist}}",
                 "BINUTILS_VERSION": self.config.binutils.version,
                 "RUNTIME_VERSION": self.config.target_gcc.version,
                 "LIB_NAME": lib_name,
                 "GLIBC_BASELINE": glibc_baseline,
                 "CHANGELOG": (
-                    f"* Initial generated spec for gcc-toolset-{self.config.toolset_id}"
+                    "* Thu Aug 27 2026 GCC Toolset Agent "
+                    "<gts-agent@example.internal> - 1\n"
+                    f"- Initial generated spec for gcc-toolset-{self.config.toolset_id}"
                 ),
             }
             specs_dir = self.job_dir / "specs"
@@ -341,6 +343,12 @@ class Orchestrator:
             {
                 "config": self.config.fingerprint_component(),
                 "source_lock": source_lock_path.read_text(encoding="utf-8"),
+                "templates": hashlib.sha256(
+                    b"".join(
+                        path.read_bytes()
+                        for path in sorted(_TEMPLATE_DIR.glob("*.spec.in"))
+                    )
+                ).hexdigest(),
             },
             runner,
         )
